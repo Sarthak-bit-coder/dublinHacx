@@ -23,6 +23,8 @@ import { IssueReportsList } from './components/IssueReportsList';
 import { StrategicPlacementPanel } from './components/StrategicPlacementPanel';
 import { CouncilActionPlanModal } from './components/CouncilActionPlanModal';
 import { SpatialPipelineModal } from './components/SpatialPipelineModal';
+import { CybersecurityModal } from './components/CybersecurityModal';
+import { UploadModal } from './components/upload/UploadModal';
 import { OfflineSyncIndicator } from './components/OfflineSyncIndicator';
 import { LiteReportApp } from './components/LiteReportApp';
 import { ControlPanelDashboard } from './components/ControlPanelDashboard';
@@ -45,7 +47,9 @@ import {
   Thermometer,
   ShieldAlert,
   Smartphone,
-  Database
+  Database,
+  ShieldCheck,
+  Upload
 } from 'lucide-react';
 
 export default function App() {
@@ -60,6 +64,8 @@ export default function App() {
   const [isReportModalOpen, setIsReportModalOpen] = useState(false);
   const [isCouncilPlanOpen, setIsCouncilPlanOpen] = useState(false);
   const [isPipelineModalOpen, setIsPipelineModalOpen] = useState(false);
+  const [isSecurityModalOpen, setIsSecurityModalOpen] = useState(false);
+  const [isUploadModalOpen, setIsUploadModalOpen] = useState(false);
   const [isLiteMode, setIsLiteMode] = useState(false);
   const [isEasyMode, setIsEasyMode] = useState(true); // Default to easy friendly mode for rural users
   const [droppedCoords, setDroppedCoords] = useState<{ x: number; y: number; lat: number; lng: number } | null>(null);
@@ -255,6 +261,8 @@ export default function App() {
         }}
         onOpenCouncilPlan={() => setIsCouncilPlanOpen(true)}
         onOpenPipelineModal={() => setIsPipelineModalOpen(true)}
+        onOpenSecurityModal={() => setIsSecurityModalOpen(true)}
+        onOpenUploadModal={() => setIsUploadModalOpen(true)}
         onOpenLiteApp={() => setAppMode('lite')}
         isLiteMode={isLiteMode}
         setIsLiteMode={setIsLiteMode}
@@ -283,6 +291,7 @@ export default function App() {
             onOpenWeatherModal={() => setIsWeatherModalOpen(true)}
             onOpenCouncilPlan={() => setIsCouncilPlanOpen(true)}
             onOpenPipelineModal={() => setIsPipelineModalOpen(true)}
+            onOpenUploadModal={() => setIsUploadModalOpen(true)}
             onUpvoteReport={handleUpvoteReport}
             isEasyMode={isEasyMode}
           />
@@ -497,6 +506,21 @@ export default function App() {
         isOpen={isPipelineModalOpen}
         onClose={() => setIsPipelineModalOpen(false)}
         reports={reports}
+      />
+
+      {/* Cybersecurity & Privacy Protection Shield Modal */}
+      <CybersecurityModal
+        isOpen={isSecurityModalOpen}
+        onClose={() => setIsSecurityModalOpen(false)}
+      />
+
+      {/* CSV Data Ingestion & Hackathon Scenario Upload Modal */}
+      <UploadModal
+        isOpen={isUploadModalOpen}
+        onClose={() => setIsUploadModalOpen(false)}
+        onLoadDataset={(newReports) => {
+          setReports(newReports);
+        }}
       />
 
       {/* Weather Impact Telemetry Modal */}

@@ -13,7 +13,9 @@ import {
   Eye,
   Layers,
   HeartPulse,
-  Database
+  Database,
+  ShieldAlert,
+  Upload
 } from 'lucide-react';
 
 interface HeaderProps {
@@ -22,6 +24,8 @@ interface HeaderProps {
   onOpenReportModal: () => void;
   onOpenCouncilPlan: () => void;
   onOpenPipelineModal?: () => void;
+  onOpenSecurityModal?: () => void;
+  onOpenUploadModal?: () => void;
   onOpenLiteApp?: () => void;
   isLiteMode: boolean;
   setIsLiteMode: (v: boolean) => void;
@@ -36,6 +40,8 @@ export const Header: React.FC<HeaderProps> = ({
   onOpenReportModal,
   onOpenCouncilPlan,
   onOpenPipelineModal,
+  onOpenSecurityModal,
+  onOpenUploadModal,
   onOpenLiteApp,
   isLiteMode,
   setIsLiteMode,
@@ -164,6 +170,18 @@ export const Header: React.FC<HeaderProps> = ({
             </button>
           )}
 
+          {/* Cybersecurity Audit & Privacy Shield Button */}
+          {onOpenSecurityModal && (
+            <button
+              onClick={onOpenSecurityModal}
+              className="hidden lg:flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-medium text-emerald-300 bg-emerald-950/60 hover:bg-emerald-900/80 border border-emerald-800/80 rounded-lg transition-all"
+              title="View Cybersecurity, PII Redaction, & Privacy Shield Telemetry"
+            >
+              <ShieldAlert className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+              <span>Cybersecurity Shield</span>
+            </button>
+          )}
+
           {/* 8-Stage Pipeline Inspector Button */}
           {onOpenPipelineModal && (
             <button
@@ -173,6 +191,18 @@ export const Header: React.FC<HeaderProps> = ({
             >
               <Database className="w-3.5 h-3.5 text-purple-400 shrink-0" />
               <span>8-Stage Pipeline</span>
+            </button>
+          )}
+
+          {/* CSV Data Upload & Scenario Switcher Button */}
+          {onOpenUploadModal && (
+            <button
+              onClick={onOpenUploadModal}
+              className="hidden lg:flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-medium text-blue-300 bg-blue-950/60 hover:bg-blue-900/80 border border-blue-800/80 rounded-lg transition-all"
+              title="Upload CSV dataset or select hackathon demo scenario"
+            >
+              <Upload className="w-3.5 h-3.5 text-blue-400 shrink-0" />
+              <span>Upload CSV / Scenarios</span>
             </button>
           )}
 
