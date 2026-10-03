@@ -287,7 +287,7 @@ export default function App() {
         {activeTab === 'map' && (
           <div className="space-y-6">
             {/* Civic Metric Ribbon */}
-            <section aria-label="District Civic Metrics" className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3 sm:gap-4">
+            <section aria-label="District Civic Metrics" className="grid grid-cols-2 sm:grid-cols-4 gap-4">
               <div className="bg-stone-900 border border-stone-800 rounded-xl p-3.5 sm:p-4 shadow-sm">
                 <span className="text-[11px] font-mono text-rose-400 uppercase tracking-wider block font-semibold">
                   Emergency Blockades
@@ -349,7 +349,7 @@ export default function App() {
               {/* Weather Degradation Metric Card */}
               <div 
                 onClick={() => setIsWeatherModalOpen(true)}
-                className="bg-stone-900 border border-stone-800 rounded-xl p-3.5 sm:p-4 shadow-sm cursor-pointer hover:border-cyan-500/50 transition-colors group relative overflow-hidden col-span-2 sm:col-span-1"
+                className="bg-stone-900 border border-stone-800 rounded-xl p-3.5 sm:p-4 shadow-sm cursor-pointer hover:border-cyan-500/50 transition-colors group relative overflow-hidden"
               >
                 <div className="flex items-center justify-between">
                   <span className="text-[11px] font-mono text-cyan-400 uppercase tracking-wider block font-semibold">
