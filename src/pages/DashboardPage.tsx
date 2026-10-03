@@ -1,5 +1,5 @@
 import React, { useState, useMemo } from 'react';
-import { MapPin, ArrowLeft, Upload, ShieldCheck, BarChart2, PlusCircle } from 'lucide-react';
+import { MapPin, ArrowLeft, Upload, ShieldCheck, BarChart2, PlusCircle, Zap } from 'lucide-react';
 import { Report, ServiceFacility, NeedZone, FilterOptions } from '../lib/types';
 import { generateSyntheticReports, INITIAL_FACILITIES } from '../data/redwoodCountyData';
 import { aggregateReportsToNeedZones } from '../lib/aggregation';
@@ -15,6 +15,7 @@ import { NarrativeSummary } from '../components/analytics/NarrativeSummary';
 import { AIPredictorCard } from '../components/analytics/AIPredictorCard';
 import { UploadModal } from '../components/upload/UploadModal';
 import { ReportModal } from '../components/reporting/ReportModal';
+import { RuralLowDataMode } from '../components/reporting/RuralLowDataMode';
 
 interface DashboardPageProps {
   onNavigateToLanding: () => void;
@@ -38,6 +39,7 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({ onNavigateToLandin
   const [selectedZone, setSelectedZone] = useState<NeedZone | null>(null);
   const [isUploadOpen, setIsUploadOpen] = useState(false);
   const [isReportOpen, setIsReportOpen] = useState(false);
+  const [isLowDataMode, setIsLowDataMode] = useState(false);
   const [activeTab, setActiveTab] = useState<'map' | 'analytics'>('map');
 
   // Compute aggregated need zones whenever reports, facilities, or filters change
@@ -65,6 +67,16 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({ onNavigateToLandin
   const handleAddResidentReport = (newReport: Report) => {
     setReports((prev) => [newReport, ...prev]);
   };
+
+  if (isLowDataMode) {
+    return (
+      <RuralLowDataMode
+        needZones={needZones}
+        onAddReport={handleAddResidentReport}
+        onExitLowDataMode={() => setIsLowDataMode(false)}
+      />
+    );
+  }
 
   return (
     <div className="min-h-screen bg-slate-100 text-slate-900 flex flex-col font-sans">
@@ -100,10 +112,14 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({ onNavigateToLandin
 
         {/* Right Header Actions */}
         <div className="flex items-center gap-2.5">
-          <div className="hidden xl:flex items-center gap-1.5 text-xs text-slate-300 bg-slate-800 px-3 py-1.5 rounded-xl border border-slate-700">
-            <ShieldCheck className="w-4 h-4 text-emerald-400" />
-            <span>Aggregate & Anonymized Mode</span>
-          </div>
+          <button
+            onClick={() => setIsLowDataMode(true)}
+            className="flex items-center gap-1.5 bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 border border-amber-500/40 px-3 py-2 rounded-xl text-xs font-bold transition-all shadow-sm active:scale-95"
+            title="Switch to ultra-lightweight low-bandwidth mode"
+          >
+            <Zap className="w-4 h-4 text-amber-400" />
+            <span className="hidden sm:inline">Low-Data Mode</span>
+          </button>
 
           <button
             onClick={() => setIsReportOpen(true)}

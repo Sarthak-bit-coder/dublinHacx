@@ -1,12 +1,17 @@
 import React from 'react';
-import { MapPin, Shield, ArrowRight } from 'lucide-react';
+import { MapPin, Shield, ArrowRight, Zap } from 'lucide-react';
 
 interface NavbarProps {
   onNavigateToDashboard: () => void;
   onOpenReportModal?: () => void;
+  onToggleLowDataMode?: () => void;
 }
 
-export const Navbar: React.FC<NavbarProps> = ({ onNavigateToDashboard, onOpenReportModal }) => {
+export const Navbar: React.FC<NavbarProps> = ({
+  onNavigateToDashboard,
+  onOpenReportModal,
+  onToggleLowDataMode,
+}) => {
   return (
     <header className="sticky top-0 z-50 bg-white/90 backdrop-blur-md border-b border-slate-200">
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between">
@@ -37,7 +42,18 @@ export const Navbar: React.FC<NavbarProps> = ({ onNavigateToDashboard, onOpenRep
         </nav>
 
         {/* Action Buttons */}
-        <div className="flex items-center gap-3">
+        <div className="flex items-center gap-2.5">
+          {onToggleLowDataMode && (
+            <button
+              onClick={onToggleLowDataMode}
+              className="hidden sm:flex items-center gap-1.5 bg-amber-50 hover:bg-amber-100 text-amber-800 border border-amber-300 px-3 py-2 rounded-lg font-bold text-xs transition-all active:scale-95"
+              title="Switch to ultra-lightweight low-bandwidth rural mode"
+            >
+              <Zap className="w-3.5 h-3.5 text-amber-600" />
+              <span>Low-Data Mode</span>
+            </button>
+          )}
+
           {onOpenReportModal && (
             <button
               onClick={onOpenReportModal}
