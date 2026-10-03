@@ -126,7 +126,7 @@ export const ControlPanelDashboard: React.FC<ControlPanelDashboardProps> = ({
               <span className="sm:hidden">Lite App</span>
             </button>
 
-            {onOpenPipelineModal && (
+            {false && (
               <button
                 onClick={onOpenPipelineModal}
                 className="hidden md:flex px-3 py-2.5 rounded-xl bg-purple-950/70 hover:bg-purple-900/80 border border-purple-800 text-purple-300 font-medium text-xs transition-colors items-center gap-1.5"
