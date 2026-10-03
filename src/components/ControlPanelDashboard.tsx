@@ -40,6 +40,7 @@ interface ControlPanelDashboardProps {
   onOpenLiteApp: () => void;
   onOpenWeatherModal?: () => void;
   onOpenCouncilPlan?: () => void;
+  onOpenPipelineModal?: () => void;
   onUpvoteReport?: (reportId: string) => void;
   isEasyMode?: boolean;
 }
@@ -56,6 +57,7 @@ export const ControlPanelDashboard: React.FC<ControlPanelDashboardProps> = ({
   onOpenLiteApp,
   onOpenWeatherModal,
   onOpenCouncilPlan,
+  onOpenPipelineModal,
   onUpvoteReport,
   isEasyMode = false,
 }) => {
@@ -123,6 +125,17 @@ export const ControlPanelDashboard: React.FC<ControlPanelDashboardProps> = ({
               <span className="hidden sm:inline">Open Lite Mobile App</span>
               <span className="sm:hidden">Lite App</span>
             </button>
+
+            {onOpenPipelineModal && (
+              <button
+                onClick={onOpenPipelineModal}
+                className="hidden md:flex px-3 py-2.5 rounded-xl bg-purple-950/70 hover:bg-purple-900/80 border border-purple-800 text-purple-300 font-medium text-xs transition-colors items-center gap-1.5"
+                title="Open 8-Stage Spatial Pipeline Inspector (MedMap Methodology)"
+              >
+                <Sparkles className="w-3.5 h-3.5 text-purple-400" />
+                <span>8-Stage Pipeline</span>
+              </button>
+            )}
 
             {onOpenCouncilPlan && (
               <button

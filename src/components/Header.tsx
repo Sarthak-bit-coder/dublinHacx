@@ -12,7 +12,8 @@ import {
   Smartphone,
   Eye,
   Layers,
-  HeartPulse
+  HeartPulse,
+  Database
 } from 'lucide-react';
 
 interface HeaderProps {
@@ -20,6 +21,7 @@ interface HeaderProps {
   setActiveTab: (tab: 'control-panel' | 'map' | 'reports' | 'ai-patterns' | 'priority-queue' | 'strategic-sites') => void;
   onOpenReportModal: () => void;
   onOpenCouncilPlan: () => void;
+  onOpenPipelineModal?: () => void;
   onOpenLiteApp?: () => void;
   isLiteMode: boolean;
   setIsLiteMode: (v: boolean) => void;
@@ -33,6 +35,7 @@ export const Header: React.FC<HeaderProps> = ({
   setActiveTab,
   onOpenReportModal,
   onOpenCouncilPlan,
+  onOpenPipelineModal,
   onOpenLiteApp,
   isLiteMode,
   setIsLiteMode,
@@ -158,6 +161,18 @@ export const Header: React.FC<HeaderProps> = ({
               <Smartphone className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
               <span className="hidden md:inline">Lite Mobile App</span>
               <span className="md:hidden">Lite App</span>
+            </button>
+          )}
+
+          {/* 8-Stage Pipeline Inspector Button */}
+          {onOpenPipelineModal && (
+            <button
+              onClick={onOpenPipelineModal}
+              className="hidden lg:flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-medium text-purple-300 bg-purple-950/60 hover:bg-purple-900/80 border border-purple-800/80 rounded-lg transition-all"
+              title="Inspect 8-Stage Spatial Data Pipeline (Census, CDC SVI, HRSA, & Optimization Engine)"
+            >
+              <Database className="w-3.5 h-3.5 text-purple-400 shrink-0" />
+              <span>8-Stage Pipeline</span>
             </button>
           )}
 

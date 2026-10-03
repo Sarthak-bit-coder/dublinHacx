@@ -121,6 +121,18 @@ Respond strictly in valid JSON with this exact structure:
   }
 });
 
+// API: 8-Stage Spatial Data Pipeline Engine (MedMap Adapted)
+app.post('/api/pipeline/run', async (_req, res) => {
+  try {
+    const { runEightStageSpatialPipeline } = await import('./src/services/pipelineEngine.js');
+    const result = runEightStageSpatialPipeline(storedReports);
+    return res.json(result);
+  } catch (err: any) {
+    console.error('Pipeline execution error:', err);
+    return res.status(500).json({ error: 'Failed to execute 8-stage spatial pipeline' });
+  }
+});
+
 // API: AI Assisted Report Extraction (Voice or natural text prompt parsing)
 app.post('/api/assist-report', async (req, res) => {
   try {

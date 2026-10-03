@@ -22,6 +22,7 @@ import { PriorityRepairQueue } from './components/PriorityRepairQueue';
 import { IssueReportsList } from './components/IssueReportsList';
 import { StrategicPlacementPanel } from './components/StrategicPlacementPanel';
 import { CouncilActionPlanModal } from './components/CouncilActionPlanModal';
+import { SpatialPipelineModal } from './components/SpatialPipelineModal';
 import { OfflineSyncIndicator } from './components/OfflineSyncIndicator';
 import { LiteReportApp } from './components/LiteReportApp';
 import { ControlPanelDashboard } from './components/ControlPanelDashboard';
@@ -43,7 +44,8 @@ import {
   Wind,
   Thermometer,
   ShieldAlert,
-  Smartphone
+  Smartphone,
+  Database
 } from 'lucide-react';
 
 export default function App() {
@@ -57,6 +59,7 @@ export default function App() {
   const [selectedItem, setSelectedItem] = useState<any>(null);
   const [isReportModalOpen, setIsReportModalOpen] = useState(false);
   const [isCouncilPlanOpen, setIsCouncilPlanOpen] = useState(false);
+  const [isPipelineModalOpen, setIsPipelineModalOpen] = useState(false);
   const [isLiteMode, setIsLiteMode] = useState(false);
   const [isEasyMode, setIsEasyMode] = useState(true); // Default to easy friendly mode for rural users
   const [droppedCoords, setDroppedCoords] = useState<{ x: number; y: number; lat: number; lng: number } | null>(null);
@@ -251,6 +254,7 @@ export default function App() {
           setIsReportModalOpen(true);
         }}
         onOpenCouncilPlan={() => setIsCouncilPlanOpen(true)}
+        onOpenPipelineModal={() => setIsPipelineModalOpen(true)}
         onOpenLiteApp={() => setAppMode('lite')}
         isLiteMode={isLiteMode}
         setIsLiteMode={setIsLiteMode}
@@ -278,6 +282,7 @@ export default function App() {
             onOpenLiteApp={() => setAppMode('lite')}
             onOpenWeatherModal={() => setIsWeatherModalOpen(true)}
             onOpenCouncilPlan={() => setIsCouncilPlanOpen(true)}
+            onOpenPipelineModal={() => setIsPipelineModalOpen(true)}
             onUpvoteReport={handleUpvoteReport}
             isEasyMode={isEasyMode}
           />
@@ -485,6 +490,13 @@ export default function App() {
         priorities={priorities}
         strategicSites={strategicSites}
         clusters={clusters}
+      />
+
+      {/* 8-Stage Spatial Data & Candidate Site Optimization Pipeline Modal */}
+      <SpatialPipelineModal
+        isOpen={isPipelineModalOpen}
+        onClose={() => setIsPipelineModalOpen(false)}
+        reports={reports}
       />
 
       {/* Weather Impact Telemetry Modal */}

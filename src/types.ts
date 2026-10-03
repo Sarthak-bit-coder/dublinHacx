@@ -116,3 +116,62 @@ export interface WeatherImpactData {
   alertHeadline: string;
   districtBreakdown: WeatherDistrictBreakdown[];
 }
+
+// 8-Stage Spatial Data Pipeline Contracts
+export type PipelineStageId = 
+  | 'raw_staging'
+  | 'normalization'
+  | 'geography'
+  | 'acs_enrichment'
+  | 'screening_features'
+  | 'candidate_sites'
+  | 'optimization'
+  | 'final_enrichment';
+
+export interface PipelineStageStatus {
+  id: PipelineStageId;
+  stageNumber: number;
+  name: string;
+  description: string;
+  sourcesUsed: string[];
+  status: 'completed' | 'running' | 'queued';
+  recordsProcessed: number;
+  checksumHash: string;
+  timestamp: string;
+  details: string;
+}
+
+export interface CandidateSiteOptimization {
+  siteId: string;
+  candidateName: string;
+  censusTractId: string;
+  districtName: string;
+  coordinates: { lat: number; lng: number; x: number; y: number };
+  accessImprovementScore: number; // 0-100
+  capacityScore: number;          // 0-100
+  vulnerabilityScore: number;     // SVI & HRSA MUA/P weight
+  configurationFitScore: number; // 0-100
+  costEfficiencyScore: number;    // 0-100
+  totalOptimizationScore: number; // Weighted total score 0-100
+  adjustedDriveTimeMin: number;   // Rural vs urban road factor
+  baselineDriveTimeMin: number;
+  timeSavedMin: number;
+  recommendedServices: string[];
+}
+
+export interface PipelineExecutionResult {
+  executionId: string;
+  pipelineVersion: string;
+  timestamp: string;
+  stages: PipelineStageStatus[];
+  candidateOptimizations: CandidateSiteOptimization[];
+  snapshotChecksum: string;
+  summaryMetrics: {
+    totalTractsEvaluated: number;
+    facilitiesGeocoded: number;
+    sviVulnerabilityIndexAvg: number;
+    hrsaShortageAreasCount: number;
+    avgDriveTimeReductionMin: number;
+  };
+}
+
