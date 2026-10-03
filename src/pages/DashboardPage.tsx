@@ -3,6 +3,7 @@ import { MapPin, ArrowLeft, Upload, ShieldCheck, BarChart2, PlusCircle, Zap } fr
 import { Report, ServiceFacility, NeedZone, FilterOptions } from '../lib/types';
 import { generateSyntheticReports, INITIAL_FACILITIES } from '../data/redwoodCountyData';
 import { aggregateReportsToNeedZones } from '../lib/aggregation';
+import { evaluateAndPromoteReportsToMap } from '../lib/aiMapPromoter';
 import { MapView } from '../components/map/MapView';
 import { FilterPanel } from '../components/dashboard/FilterPanel';
 import { ZoneDetailsPanel } from '../components/dashboard/ZoneDetailsPanel';
@@ -13,6 +14,7 @@ import { TrendChart } from '../components/analytics/TrendChart';
 import { PriorityList } from '../components/analytics/PriorityList';
 import { NarrativeSummary } from '../components/analytics/NarrativeSummary';
 import { AIPredictorCard } from '../components/analytics/AIPredictorCard';
+import { AIMapPromotionBanner } from '../components/analytics/AIMapPromotionBanner';
 import { UploadModal } from '../components/upload/UploadModal';
 import { ReportModal } from '../components/reporting/ReportModal';
 import { RuralLowDataMode } from '../components/reporting/RuralLowDataMode';
@@ -215,6 +217,17 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({ onNavigateToLandin
             </h3>
             <span className="text-xs text-slate-500">Live filter synchronized</span>
           </div>
+
+          {/* AI Store & Forward Map Auto-Promotion Engine Alert */}
+          {(() => {
+            const aiPromotion = evaluateAndPromoteReportsToMap(reports);
+            return (
+              <AIMapPromotionBanner
+                logs={aiPromotion.logMessages}
+                newlyPromotedCount={aiPromotion.newlyAddedZoneIds.length}
+              />
+            );
+          })()}
 
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
             <NarrativeSummary needZones={needZones} />
