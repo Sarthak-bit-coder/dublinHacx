@@ -1,4 +1,4 @@
-import React, { useState, useRef } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { 
   IssueReport, 
   PriorityRepair, 
@@ -7,9 +7,6 @@ import {
 } from '../types';
 import { 
   Layers, 
-  ZoomIn, 
-  ZoomOut, 
-  RotateCcw, 
   Eye, 
   Crosshair, 
   AlertTriangle, 
@@ -18,15 +15,24 @@ import {
   Droplet, 
   Zap, 
   Radio, 
-  Truck, 
   X, 
-  CheckCircle2, 
   ChevronRight,
   ThumbsUp,
   MapPin,
   Clock,
-  Users
+  Users,
+  Compass,
+  Sliders,
+  Box,
+  RotateCw,
+  Check,
+  Maximize2,
+  Minimize2,
+  Sparkles,
+  Search,
+  Filter
 } from 'lucide-react';
+import L from 'leaflet';
 
 interface InteractiveMapProps {
   reports: IssueReport[];
@@ -35,12 +41,48 @@ interface InteractiveMapProps {
   selectedItem: IssueReport | PriorityRepair | StrategicSite | null;
   onSelectItem: (item: any) => void;
   onDropPin: (coords: { x: number; y: number; lat: number; lng: number }) => void;
-  onUpvoteReport: (reportId: string) => void;
-  isLiteMode: boolean;
+  onUpvoteReport?: (reportId: string) => void;
+  isLiteMode?: boolean;
 }
 
-type MapLayer = 'all' | 'reports' | 'repairs' | 'facilities' | 'isochrone';
-type MapStyle = 'topo' | 'satellite' | 'heatmap';
+// Tile layers definitions for real map
+const TILE_SERVERS = {
+  satellite: {
+    url: 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
+    attribution: 'Tiles &copy; Esri &mdash; Source: Esri, i-cubed, USDA, USGS, AEX, GeoEye, Getmapping, Aerogrid, IGN, IGP, UPR-EGP, and the GIS User Community'
+  },
+  dark: {
+    url: 'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png',
+    attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/attributions">CARTO</a>'
+  },
+  topo: {
+    url: 'https://{s}.tile.opentopomap.org/{z}/{x}/{y}.png',
+    attribution: 'Map data: &copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors, <a href="http://viewfinderpanoramas.org">SRTM</a> | Map style: &copy; <a href="https://opentopomap.org">OpenTopoMap</a>'
+  }
+};
+
+interface CandidateSiteItem {
+  id: string;
+  rank: number;
+  name: string;
+  region: string;
+  lat: number;
+  lng: number;
+  score: number;
+  populationWithin30Min: number;
+  beds: number;
+  type: 'hospital' | 'depot' | 'clinic';
+  reasons: string;
+}
+
+// Preset model weight configurations matching reference design
+const WEIGHT_PRESETS = {
+  balanced: { peopleHelped: 23, remoteness: 16, bedShortage: 17, communityNeed: 12, serviceDemand: 12, rightSize: 12, valueCost: 12 },
+  mostPeople: { peopleHelped: 45, remoteness: 5, bedShortage: 15, communityNeed: 10, serviceDemand: 10, rightSize: 10, valueCost: 5 },
+  remoteAreas: { peopleHelped: 10, remoteness: 45, bedShortage: 15, communityNeed: 15, serviceDemand: 5, rightSize: 5, valueCost: 5 },
+  highNeed: { peopleHelped: 15, remoteness: 15, bedShortage: 15, communityNeed: 40, serviceDemand: 5, rightSize: 5, valueCost: 5 },
+  bestValue: { peopleHelped: 15, remoteness: 10, bedShortage: 10, communityNeed: 10, serviceDemand: 10, rightSize: 15, valueCost: 30 }
+};
 
 export const InteractiveMap: React.FC<InteractiveMapProps> = ({
   reports,
@@ -50,702 +92,570 @@ export const InteractiveMap: React.FC<InteractiveMapProps> = ({
   onSelectItem,
   onDropPin,
   onUpvoteReport,
-  isLiteMode,
+  isLiteMode = false,
 }) => {
-  const [activeLayer, setActiveLayer] = useState<MapLayer>('all');
-  const [mapStyle, setMapStyle] = useState<MapStyle>('topo');
-  const [zoomLevel, setZoomLevel] = useState<number>(1);
-  const [pan, setPan] = useState<{ x: number; y: number }>({ x: 0, y: 0 });
+  // Real Leaflet Map Container Reference
+  const mapContainerRef = useRef<HTMLDivElement | null>(null);
+  const leafletMapRef = useRef<L.Map | null>(null);
+  const markersGroupRef = useRef<L.LayerGroup | null>(null);
+  const heatCirclesGroupRef = useRef<L.LayerGroup | null>(null);
+
+  // Map Controls State
+  const [mapTileStyle, setMapTileStyle] = useState<'satellite' | 'dark' | 'topo'>('satellite');
+  const [is3DMode, setIs3DMode] = useState<boolean>(true);
+  const [pitchAngle, setPitchAngle] = useState<number>(38); // 3D Pitch tilt angle 0° - 55°
+  const [rotationAngle, setRotationAngle] = useState<number>(-12); // 3D Rotation angle
+  const [updateOnMove, setUpdateOnMove] = useState<boolean>(true);
   const [isPinDropMode, setIsPinDropMode] = useState<boolean>(false);
-  const [categoryFilter, setCategoryFilter] = useState<IssueCategory | 'all'>('all');
-  const [hoveredItem, setHoveredItem] = useState<any>(null);
+  const [regionFilter, setRegionFilter] = useState<string>('all');
+  const [activePreset, setActivePreset] = useState<keyof typeof WEIGHT_PRESETS>('balanced');
 
-  const mapSvgRef = useRef<SVGSVGElement | null>(null);
+  // Sliders State (Model Weights matching reference image)
+  const [weights, setWeights] = useState(WEIGHT_PRESETS.balanced);
 
-  // Handle map click for pin-drop mode
-  const handleMapClick = (e: React.MouseEvent<SVGSVGElement>) => {
-    if (!isPinDropMode || !mapSvgRef.current) return;
-    const rect = mapSvgRef.current.getBoundingClientRect();
-    const clickX = ((e.clientX - rect.left) / rect.width) * 100;
-    const clickY = ((e.clientY - rect.top) / rect.height) * 100;
+  // Candidate Sites List
+  const [candidateList, setCandidateList] = useState<CandidateSiteItem[]>([
+    { id: 'site-1', rank: 1, name: 'Pittsburg County, OK', region: 'Oklahoma', lat: 34.92, lng: -95.76, score: 90, populationWithin30Min: 40774, beds: 100, type: 'hospital', reasons: 'High rural health desert & emergency isolation' },
+    { id: 'site-2', rank: 2, name: 'Dixie County, FL', region: 'Florida', lat: 29.61, lng: -83.16, score: 89, populationWithin30Min: 40209, beds: 100, type: 'hospital', reasons: 'Coastal storm surge & road access cutoff' },
+    { id: 'site-3', rank: 3, name: 'Pine Crossroads, ID', region: 'Idaho Precinct 4', lat: 44.182, lng: -116.425, score: 89, populationWithin30Min: 14820, beds: 50, type: 'hospital', reasons: 'Mountain pass culvert failure & ambulance delay' },
+    { id: 'site-4', rank: 4, name: 'Navajo County, AZ', region: 'Arizona', lat: 34.88, lng: -110.02, score: 89, populationWithin30Min: 9995, beds: 25, type: 'clinic', reasons: 'Tribal lands health shortage area' },
+    { id: 'site-5', rank: 5, name: 'Highland Ridge Depot, ID', region: 'Idaho Precinct 7', lat: 44.225, lng: -116.385, score: 88, populationWithin30Min: 18450, beds: 35, type: 'depot', reasons: 'Equidistant heavy technician & lineman staging' },
+    { id: 'site-6', rank: 6, name: 'San Miguel County, NM', region: 'New Mexico', lat: 35.45, lng: -105.15, score: 88, populationWithin30Min: 19462, beds: 50, type: 'hospital', reasons: 'Wildfire evac corridor & flash flood risk' },
+    { id: 'site-7', rank: 7, name: 'Gila County, AZ', region: 'Arizona', lat: 33.40, lng: -110.85, score: 88, populationWithin30Min: 19817, beds: 50, type: 'clinic', reasons: 'MUA/P HRSA primary care shortage' },
+    { id: 'site-8', rank: 8, name: 'Prince Edward County, VA', region: 'Virginia', lat: 37.22, lng: -78.43, score: 88, populationWithin30Min: 46950, beds: 100, type: 'hospital', reasons: 'High elder population density' },
+    { id: 'site-9', rank: 9, name: 'Wright County, MO', region: 'Missouri', lat: 37.27, lng: -92.46, score: 88, populationWithin30Min: 34073, beds: 100, type: 'hospital', reasons: 'High SVI index & river basin washout' },
+    { id: 'site-10', rank: 10, name: 'Zapata County, TX', region: 'Texas', lat: 26.90, lng: -99.27, score: 88, populationWithin30Min: 13855, beds: 25, type: 'clinic', reasons: 'Border colonias healthcare void' },
+    { id: 'site-11', rank: 11, name: 'Stephens County, OK', region: 'Oklahoma', lat: 34.48, lng: -97.94, score: 87, populationWithin30Min: 28838, beds: 50, type: 'hospital', reasons: 'Tornado corridor backup facility' }
+  ]);
 
-    // Approximate geographical conversion
-    const lat = 44.05 + (1 - clickY / 100) * 0.3;
-    const lng = -116.6 + (clickX / 100) * 0.35;
+  // Recalculate Candidate Site Scores dynamically when weights change
+  useEffect(() => {
+    const totalWeight = weights.peopleHelped + weights.remoteness + weights.bedShortage + weights.communityNeed + weights.serviceDemand + weights.rightSize + weights.valueCost;
+    if (totalWeight === 0) return;
 
-    onDropPin({
-      x: Math.round(clickX * 10) / 10,
-      y: Math.round(clickY * 10) / 10,
-      lat: Math.round(lat * 10000) / 10000,
-      lng: Math.round(lng * 10000) / 10000,
+    setCandidateList((prev) => {
+      const updated = prev.map((site) => {
+        // Dynamic scoring algorithm based on model sliders
+        const pFactor = (site.populationWithin30Min / 50000) * (weights.peopleHelped / totalWeight);
+        const rFactor = (site.type === 'depot' ? 0.9 : 0.7) * (weights.remoteness / totalWeight);
+        const bFactor = (site.beds / 100) * (weights.bedShortage / totalWeight);
+        const cFactor = 0.85 * (weights.communityNeed / totalWeight);
+        const sFactor = 0.80 * (weights.serviceDemand / totalWeight);
+        const vFactor = 0.90 * (weights.valueCost / totalWeight);
+
+        const newScore = Math.min(99, Math.max(70, Math.round((pFactor + rFactor + bFactor + cFactor + sFactor + vFactor) * 100)));
+        return { ...site, score: newScore };
+      });
+
+      // Sort by new optimization score
+      updated.sort((a, b) => b.score - a.score);
+      return updated.map((site, index) => ({ ...site, rank: index + 1 }));
     });
-    setIsPinDropMode(false);
+  }, [weights]);
+
+  // Handle preset selection
+  const applyPreset = (presetKey: keyof typeof WEIGHT_PRESETS) => {
+    setActivePreset(presetKey);
+    setWeights(WEIGHT_PRESETS[presetKey]);
   };
 
-  const filteredReports = reports.filter((r) => {
-    if (categoryFilter !== 'all' && r.category !== categoryFilter) return false;
-    return true;
-  });
+  // Initialize Real Leaflet Map
+  useEffect(() => {
+    if (!mapContainerRef.current || leafletMapRef.current) return;
 
-  const getCategoryIcon = (category: IssueCategory) => {
-    switch (category) {
-      case 'road': return <AlertTriangle className="w-3.5 h-3.5 text-amber-400" />;
-      case 'bridge': return <Wrench className="w-3.5 h-3.5 text-rose-400" />;
-      case 'water': return <Droplet className="w-3.5 h-3.5 text-cyan-400" />;
-      case 'power': return <Zap className="w-3.5 h-3.5 text-yellow-400" />;
-      case 'health': return <Hospital className="w-3.5 h-3.5 text-emerald-400" />;
-      case 'telecom': return <Radio className="w-3.5 h-3.5 text-indigo-400" />;
-    }
-  };
+    // Center map on Idaho Precinct / Midwest US region
+    const map = L.map(mapContainerRef.current, {
+      center: [44.19, -116.43],
+      zoom: 10,
+      zoomControl: false,
+      attributionControl: false,
+    });
 
-  const getSeverityBorderColor = (sev: string) => {
-    switch (sev) {
-      case 'critical': return 'border-red-500 bg-red-950/80 text-red-300';
-      case 'high': return 'border-amber-500 bg-amber-950/80 text-amber-300';
-      default: return 'border-stone-500 bg-stone-900/80 text-stone-300';
+    leafletMapRef.current = map;
+
+    // Add Tile Layer
+    const tileConfig = TILE_SERVERS[mapTileStyle];
+    L.tileLayer(tileConfig.url, {
+      maxZoom: 18,
+      subdomains: 'abcd',
+    }).addTo(map);
+
+    // Create Layer Groups
+    heatCirclesGroupRef.current = L.layerGroup().addTo(map);
+    markersGroupRef.current = L.layerGroup().addTo(map);
+
+    // Map click for pin drop
+    map.on('click', (e: L.LeafletMouseEvent) => {
+      onDropPin({
+        lat: Math.round(e.latlng.lat * 10000) / 10000,
+        lng: Math.round(e.latlng.lng * 10000) / 10000,
+        x: 50,
+        y: 50,
+      });
+    });
+
+    return () => {
+      map.remove();
+      leafletMapRef.current = null;
+    };
+  }, []);
+
+  // Update Tile Layer when tile style changes
+  useEffect(() => {
+    const map = leafletMapRef.current;
+    if (!map) return;
+
+    map.eachLayer((layer) => {
+      if (layer instanceof L.TileLayer) {
+        map.removeLayer(layer);
+      }
+    });
+
+    const tileConfig = TILE_SERVERS[mapTileStyle];
+    L.tileLayer(tileConfig.url, {
+      maxZoom: 18,
+      subdomains: 'abcd',
+    }).addTo(map);
+  }, [mapTileStyle]);
+
+  // Render Real Markers & Heat Circles on Leaflet Map
+  useEffect(() => {
+    const map = leafletMapRef.current;
+    const markersGroup = markersGroupRef.current;
+    const heatGroup = heatCirclesGroupRef.current;
+    if (!map || !markersGroup || !heatGroup) return;
+
+    markersGroup.clearLayers();
+    heatGroup.clearLayers();
+
+    // 1. Draw Population & Need Heatmap Circles
+    candidateList.forEach((site) => {
+      const radius = 25000 + site.populationWithin30Min * 0.8;
+      const color = site.score > 88 ? '#ef4444' : site.score > 85 ? '#f59e0b' : '#3b82f6';
+
+      L.circle([site.lat, site.lng], {
+        radius,
+        color: 'transparent',
+        fillColor: color,
+        fillOpacity: 0.22,
+      }).addTo(heatGroup);
+
+      // Inner core heat pulse
+      L.circle([site.lat, site.lng], {
+        radius: radius * 0.4,
+        color: color,
+        weight: 1.5,
+        fillColor: color,
+        fillOpacity: 0.45,
+      }).addTo(heatGroup);
+    });
+
+    // 2. Add Candidate Site Ranked Markers
+    candidateList.forEach((site) => {
+      const isTop3 = site.rank <= 3;
+      const markerHtml = `
+        <div class="relative group cursor-pointer">
+          <div class="w-8 h-8 rounded-full ${isTop3 ? 'bg-blue-600 text-white shadow-blue-500/50 ring-4 ring-blue-500/30' : 'bg-stone-900 border border-stone-700 text-stone-200'} font-bold font-mono text-xs flex items-center justify-center shadow-lg transition-transform transform hover:scale-125">
+            ${site.rank}
+          </div>
+          <div class="absolute bottom-full left-1/2 -translate-x-1/2 mb-1 hidden group-hover:block bg-stone-900 border border-stone-700 rounded px-2 py-1 text-[10px] font-mono text-white whitespace-nowrap shadow-xl z-50">
+            ${site.name} (${site.score} pts)
+          </div>
+        </div>
+      `;
+
+      const customIcon = L.divIcon({
+        html: markerHtml,
+        className: 'custom-leaflet-marker',
+        iconSize: [32, 32],
+        iconAnchor: [16, 16],
+      });
+
+      const marker = L.marker([site.lat, site.lng], { icon: customIcon }).addTo(markersGroup);
+      marker.on('click', () => {
+        onSelectItem({
+          id: site.id,
+          name: site.name,
+          title: `${site.name} (Rank #${site.rank})`,
+          keyJustification: `${site.reasons}. Serves ${site.populationWithin30Min.toLocaleString()} residents within 30 min.`,
+          priorityScore: site.score,
+          avgTravelTimeReductionMin: 36,
+          coveragePopulation: site.populationWithin30Min,
+          district: site.region,
+          coordinates: { lat: site.lat, lng: site.lng, x: 50, y: 50 }
+        });
+      });
+    });
+
+    // 3. Add Active Citizen Reports & Washed Out Bridges
+    reports.forEach((rep) => {
+      const lat = rep.coordinates.lat || 44.195;
+      const lng = rep.coordinates.lng || -116.481;
+
+      const isCritical = rep.severity === 'critical';
+      const iconHtml = `
+        <div class="w-5 h-5 rounded-full ${isCritical ? 'bg-red-600 ring-4 ring-red-500/40 animate-pulse' : 'bg-amber-500'} border-2 border-stone-950 flex items-center justify-center shadow-md">
+          <div class="w-1.5 h-1.5 rounded-full bg-white"></div>
+        </div>
+      `;
+
+      const customIcon = L.divIcon({
+        html: iconHtml,
+        className: 'custom-report-marker',
+        iconSize: [20, 20],
+        iconAnchor: [10, 10],
+      });
+
+      const marker = L.marker([lat, lng], { icon: customIcon }).addTo(markersGroup);
+      marker.on('click', () => onSelectItem(rep));
+    });
+
+  }, [candidateList, reports, mapTileStyle]);
+
+  // Pan map to candidate site on click from left panel
+  const handleSelectCandidate = (site: CandidateSiteItem) => {
+    const map = leafletMapRef.current;
+    if (map) {
+      map.flyTo([site.lat, site.lng], 11, { duration: 1.5 });
     }
+    onSelectItem({
+      id: site.id,
+      name: site.name,
+      title: `${site.name} (Rank #${site.rank})`,
+      keyJustification: `${site.reasons}. Serves ${site.populationWithin30Min.toLocaleString()} residents within 30 minutes.`,
+      priorityScore: site.score,
+      avgTravelTimeReductionMin: 36,
+      coveragePopulation: site.populationWithin30Min,
+      district: site.region,
+      coordinates: { lat: site.lat, lng: site.lng, x: 50, y: 50 }
+    });
   };
 
   return (
-    <div className="relative w-full h-[620px] lg:h-[700px] bg-stone-950 border border-stone-800 rounded-xl overflow-hidden shadow-2xl flex flex-col select-none">
-      {/* Top Map Toolbar Bar */}
-      <div className="z-20 bg-stone-950/90 backdrop-blur-md px-3 sm:px-4 py-2.5 border-b border-stone-800 flex flex-wrap items-center justify-between gap-3">
-        {/* Layer Tabs */}
-        <div className="flex items-center gap-1 bg-stone-900/80 p-1 rounded-lg border border-stone-800 text-xs">
-          <button
-            onClick={() => setActiveLayer('all')}
-            className={`px-2.5 py-1 rounded font-medium transition-colors ${
-              activeLayer === 'all' ? 'bg-stone-800 text-stone-100 shadow-sm' : 'text-stone-400 hover:text-stone-200'
-            }`}
-          >
-            All Layers
-          </button>
-          <button
-            onClick={() => setActiveLayer('reports')}
-            className={`px-2.5 py-1 rounded font-medium transition-colors ${
-              activeLayer === 'reports' ? 'bg-stone-800 text-amber-300 shadow-sm' : 'text-stone-400 hover:text-stone-200'
-            }`}
-          >
-            Reports ({reports.length})
-          </button>
-          <button
-            onClick={() => setActiveLayer('repairs')}
-            className={`px-2.5 py-1 rounded font-medium transition-colors ${
-              activeLayer === 'repairs' ? 'bg-stone-800 text-red-400 shadow-sm' : 'text-stone-400 hover:text-stone-200'
-            }`}
-          >
-            Repairs ({priorities.length})
-          </button>
-          <button
-            onClick={() => setActiveLayer('facilities')}
-            className={`px-2.5 py-1 rounded font-medium transition-colors ${
-              activeLayer === 'facilities' ? 'bg-stone-800 text-emerald-400 shadow-sm' : 'text-stone-400 hover:text-stone-200'
-            }`}
-          >
-            Allocations ({strategicSites.length})
-          </button>
-          <button
-            onClick={() => setActiveLayer('isochrone')}
-            className={`hidden md:block px-2.5 py-1 rounded font-medium transition-colors ${
-              activeLayer === 'isochrone' ? 'bg-stone-800 text-rose-300 shadow-sm' : 'text-stone-400 hover:text-stone-200'
-            }`}
-          >
-            Health Desert
-          </button>
-        </div>
-
-        {/* Category Filter Pills (Functional Buttons) */}
-        {activeLayer !== 'facilities' && (
-          <div className="hidden xl:flex items-center gap-1.5 text-xs">
-            <span className="text-stone-500 font-mono text-[11px] mr-1">Filter:</span>
-            {(['all', 'road', 'bridge', 'water', 'power', 'health'] as const).map((cat) => (
-              <button
-                key={cat}
-                onClick={() => setCategoryFilter(cat)}
-                className={`px-2 py-0.5 rounded text-[11px] transition-colors ${
-                  categoryFilter === cat
-                    ? 'bg-stone-800 text-emerald-400 border border-stone-700 font-medium'
-                    : 'text-stone-400 hover:text-stone-200'
-                }`}
-              >
-                {cat.charAt(0).toUpperCase() + cat.slice(1)}
-              </button>
-            ))}
-          </div>
-        )}
-
-        {/* View Mode & Pin Drop Action */}
-        <div className="flex items-center gap-2">
-          {/* Map Style Selector */}
-          <div className="flex items-center gap-1 bg-stone-900 p-0.5 rounded border border-stone-800 text-xs">
-            <button
-              onClick={() => setMapStyle('topo')}
-              className={`px-2 py-1 rounded ${mapStyle === 'topo' ? 'bg-stone-800 text-stone-200' : 'text-stone-500 hover:text-stone-300'}`}
-              title="Topographic GIS"
-            >
-              Topo
-            </button>
-            <button
-              onClick={() => setMapStyle('satellite')}
-              className={`px-2 py-1 rounded ${mapStyle === 'satellite' ? 'bg-stone-800 text-stone-200' : 'text-stone-500 hover:text-stone-300'}`}
-              title="Satellite Terrain"
-            >
-              Satellite
-            </button>
-            <button
-              onClick={() => setMapStyle('heatmap')}
-              className={`px-2 py-1 rounded ${mapStyle === 'heatmap' ? 'bg-stone-800 text-stone-200' : 'text-stone-500 hover:text-stone-300'}`}
-              title="Degradation Heatmap"
-            >
-              Heatmap
-            </button>
-          </div>
-
-          {/* Drop Pin Mode Toggle */}
-          <button
-            onClick={() => setIsPinDropMode(!isPinDropMode)}
-            className={`px-3 py-1.5 text-xs font-medium rounded-md border flex items-center gap-1.5 transition-all ${
-              isPinDropMode
-                ? 'bg-emerald-500 text-stone-950 border-emerald-400 shadow-md animate-pulse'
-                : 'bg-stone-900 text-stone-300 border-stone-700 hover:bg-stone-800'
-            }`}
-          >
-            <Crosshair className="w-3.5 h-3.5" />
-            <span>{isPinDropMode ? 'Click Map to Place' : 'Drop Pin'}</span>
-          </button>
-        </div>
-      </div>
-
-      {/* Main Map Canvas */}
-      <div className="relative flex-1 w-full h-full overflow-hidden bg-stone-950">
-        <svg
-          ref={mapSvgRef}
-          onClick={handleMapClick}
-          className={`w-full h-full ${isPinDropMode ? 'cursor-crosshair' : 'cursor-default'}`}
-          viewBox="0 0 1000 650"
-          preserveAspectRatio="xMidYMid slice"
-        >
-          <defs>
-            {/* Background pattern for satellite or topo */}
-            <radialGradient id="satelliteGlow" cx="50%" cy="50%" r="70%">
-              <stop offset="0%" stopColor="#1e241c" />
-              <stop offset="60%" stopColor="#131713" />
-              <stop offset="100%" stopColor="#0c0e0c" />
-            </radialGradient>
-
-            <linearGradient id="valleySlope" x1="0%" y1="0%" x2="100%" y2="100%">
-              <stop offset="0%" stopColor="#25241e" stopOpacity="0.4" />
-              <stop offset="100%" stopColor="#161715" stopOpacity="0.8" />
-            </linearGradient>
-
-            {/* Pattern for Healthcare Void Zone */}
-            <pattern id="diagonalHatch" width="12" height="12" patternTransform="rotate(45 0 0)" patternUnits="userSpaceOnUse">
-              <line x1="0" y1="0" x2="0" y2="12" stroke="#ef4444" strokeWidth="1.5" strokeOpacity="0.25" />
-            </pattern>
-
-            {/* Heatmap gradients */}
-            <radialGradient id="heatHotspot1" cx="28%" cy="34%" r="18%">
-              <stop offset="0%" stopColor="#ef4444" stopOpacity="0.45" />
-              <stop offset="50%" stopColor="#f59e0b" stopOpacity="0.2" />
-              <stop offset="100%" stopColor="#ef4444" stopOpacity="0" />
-            </radialGradient>
-
-            <radialGradient id="heatHotspot2" cx="52%" cy="22%" r="20%">
-              <stop offset="0%" stopColor="#dc2626" stopOpacity="0.5" />
-              <stop offset="60%" stopColor="#ea580c" stopOpacity="0.25" />
-              <stop offset="100%" stopColor="#dc2626" stopOpacity="0" />
-            </radialGradient>
-
-            <radialGradient id="heatHotspot3" cx="22%" cy="15%" r="16%">
-              <stop offset="0%" stopColor="#f97316" stopOpacity="0.4" />
-              <stop offset="100%" stopColor="#f97316" stopOpacity="0" />
-            </radialGradient>
-
-            {/* Coverage radius gradients for facilities */}
-            <radialGradient id="hospitalCoverage" cx="50%" cy="50%" r="50%">
-              <stop offset="0%" stopColor="#10b981" stopOpacity="0.35" />
-              <stop offset="70%" stopColor="#10b981" stopOpacity="0.12" />
-              <stop offset="100%" stopColor="#10b981" stopOpacity="0" />
-            </radialGradient>
-
-            <radialGradient id="depotCoverage" cx="50%" cy="50%" r="50%">
-              <stop offset="0%" stopColor="#38bdf8" stopOpacity="0.3" />
-              <stop offset="75%" stopColor="#0284c7" stopOpacity="0.1" />
-              <stop offset="100%" stopColor="#0284c7" stopOpacity="0" />
-            </radialGradient>
-
-            {/* Grid Pattern */}
-            <pattern id="gridPattern" width="40" height="40" patternUnits="userSpaceOnUse">
-              <path d="M 40 0 L 0 0 0 40" fill="none" stroke="#292524" strokeWidth="0.5" strokeOpacity="0.4" />
-            </pattern>
-          </defs>
-
-          {/* Base Layer depending on style */}
-          {mapStyle === 'satellite' ? (
-            <rect width="1000" height="650" fill="url(#satelliteGlow)" />
-          ) : (
-            <rect width="1000" height="650" fill="#141210" />
-          )}
-
-          {/* Topographic Contour Lines */}
-          <g className="opacity-25" stroke="#78716c" strokeWidth="0.75" fill="none">
-            {/* Mountain Ridge 1 */}
-            <path d="M 50 180 Q 220 90 400 120 T 780 80 T 960 140" />
-            <path d="M 40 220 Q 240 130 420 160 T 800 120 T 970 180" />
-            <path d="M 30 270 Q 250 190 440 210 T 820 180 T 980 230" />
-            {/* Valley Contours */}
-            <path d="M 80 400 Q 290 320 520 340 T 900 310" />
-            <path d="M 90 470 Q 320 390 560 410 T 920 380" />
-            <path d="M 120 560 Q 360 470 600 500 T 940 460" />
-            <path d="M 160 620 Q 400 540 650 570 T 960 540" />
-          </g>
-
-          {/* Elevation Labels */}
-          <g className="fill-stone-600 text-[9px] font-mono select-none opacity-40">
-            <text x="60" y="175">EL 1840m</text>
-            <text x="750" y="75">EL 2100m (Timber Pass)</text>
-            <text x="80" y="465">EL 980m (Pine Basin)</text>
-            <text x="700" y="500">EL 820m (Cedar Flats)</text>
-          </g>
-
-          {/* Map Grid */}
-          <rect width="1000" height="650" fill="url(#gridPattern)" />
-
-          {/* River & Creek Drainage Network */}
-          <g fill="none">
-            {/* Blackwood River */}
-            <path
-              d="M 980 40 Q 820 110 650 170 T 480 280 T 320 380 T 150 490 T 20 620"
-              stroke="#0284c7"
-              strokeWidth="5"
-              strokeOpacity="0.7"
-              strokeLinecap="round"
-            />
-            {/* Mill Creek Tributary */}
-            <path
-              d="M 280 20 Q 320 140 380 220 T 480 280"
-              stroke="#38bdf8"
-              strokeWidth="2.5"
-              strokeOpacity="0.6"
-              strokeLinecap="round"
-            />
-            {/* South Fork Branch */}
-            <path
-              d="M 480 280 Q 580 390 680 470 T 890 610"
-              stroke="#0ea5e9"
-              strokeWidth="3"
-              strokeOpacity="0.6"
-              strokeLinecap="round"
-            />
-          </g>
-
-          {/* Waterway Labels */}
-          <g className="fill-sky-400 text-[10px] font-mono italic opacity-60">
-            <text x="660" y="160" transform="rotate(15 660 160)">Blackwood River</text>
-            <text x="320" y="120" transform="rotate(65 320 120)">Mill Creek</text>
-            <text x="600" y="410" transform="rotate(35 600 410)">South Fork</text>
-          </g>
-
-          {/* Healthcare Desert / Isochrone Layer (>45 min ambulance) */}
-          {(activeLayer === 'all' || activeLayer === 'isochrone') && (
-            <g className="transition-opacity duration-300">
-              {/* Isolated high valley polygon */}
-              <polygon
-                points="120,60 380,80 460,240 260,340 100,280 60,140"
-                fill="url(#diagonalHatch)"
-                stroke="#ef4444"
-                strokeWidth="1.5"
-                strokeDasharray="4 4"
-                strokeOpacity="0.6"
-              />
-              <text x="140" y="140" fill="#f87171" className="text-[10px] font-mono font-semibold opacity-85">
-                ISOLATION VOID: &gt;55 Min Response Zone
-              </text>
-            </g>
-          )}
-
-          {/* Degradation Heatmap Overlay (if selected) */}
-          {mapStyle === 'heatmap' && (
-            <g className="mix-blend-screen pointer-events-none">
-              <circle cx="280" cy="221" r="140" fill="url(#heatHotspot1)" />
-              <circle cx="520" cy="143" r="160" fill="url(#heatHotspot2)" />
-              <circle cx="220" cy="98" r="120" fill="url(#heatHotspot3)" />
-            </g>
-          )}
-
-          {/* Road Network */}
-          <g fill="none">
-            {/* Primary County Route 14 (Paved Arterial) */}
-            <path
-              d="M 50 360 Q 220 330 460 350 T 820 390 T 960 410"
-              stroke="#e7e5e4"
-              strokeWidth="3.5"
-              strokeOpacity="0.8"
-            />
-            {/* Secondary Arterial 8 (Valley Corridor) */}
-            <path
-              d="M 460 350 Q 510 240 540 150 T 560 30"
-              stroke="#a8a29e"
-              strokeWidth="2.5"
-              strokeDasharray="6 3"
-              strokeOpacity="0.75"
-            />
-            {/* East Ridge Logging Pass (Vulnerable unpaved) */}
-            <path
-              d="M 180 450 Q 240 320 280 220 T 360 140"
-              stroke="#d97706"
-              strokeWidth="2"
-              strokeDasharray="4 4"
-              strokeOpacity="0.8"
-            />
-            {/* Highland Timber Pass Spur (High washout risk) */}
-            <path
-              d="M 280 220 Q 230 160 210 95 T 190 40"
-              stroke="#ea580c"
-              strokeWidth="2"
-              strokeDasharray="3 3"
-              strokeOpacity="0.8"
-            />
-            {/* South Canyon Road */}
-            <path
-              d="M 460 350 Q 560 460 620 507 T 720 620"
-              stroke="#78716c"
-              strokeWidth="1.75"
-              strokeDasharray="4 4"
-              strokeOpacity="0.7"
-            />
-          </g>
-
-          {/* Settlement / Community Centroid Anchors */}
-          <g className="text-stone-300 font-medium text-[11px] select-none">
-            {/* Pine Basin Village */}
-            <circle cx="460" cy="350" r="4.5" fill="#f59e0b" stroke="#1c1917" strokeWidth="2" />
-            <text x="472" y="354" className="font-semibold fill-amber-300">Pine Crossroads</text>
-
-            {/* Highland Valley */}
-            <circle cx="210" cy="95" r="4" fill="#a8a29e" stroke="#1c1917" strokeWidth="1.5" />
-            <text x="222" y="99" className="fill-stone-300">Highland Valley (Pop. 1,420)</text>
-
-            {/* Blackwood Crossing */}
-            <circle cx="530" cy="145" r="4" fill="#a8a29e" stroke="#1c1917" strokeWidth="1.5" />
-            <text x="542" y="149" className="fill-stone-300">Blackwood Hamlet</text>
-
-            {/* Cedar Flats */}
-            <circle cx="780" cy="420" r="4.5" fill="#a8a29e" stroke="#1c1917" strokeWidth="1.5" />
-            <text x="792" y="424" className="fill-stone-300">Cedar Flats (Pop. 3,100)</text>
-          </g>
-
-          {/* Strategic Facilities Coverage Shadows */}
-          {(activeLayer === 'all' || activeLayer === 'facilities') && (
-            <g>
-              {strategicSites.map((site) => {
-                const cx = (site.coordinates.x / 100) * 1000;
-                const cy = (site.coordinates.y / 100) * 650;
-                const radius = site.type === 'hospital' ? 180 : site.type === 'technician_depot' ? 220 : 110;
-                const gradId = site.type === 'hospital' ? 'url(#hospitalCoverage)' : 'url(#depotCoverage)';
-
-                return (
-                  <g key={`cov-${site.id}`}>
-                    <circle
-                      cx={cx}
-                      cy={cy}
-                      r={radius}
-                      fill={gradId}
-                      stroke={site.type === 'hospital' ? '#10b981' : '#0284c7'}
-                      strokeWidth="1"
-                      strokeDasharray="4 4"
-                      strokeOpacity="0.4"
-                    />
-                  </g>
-                );
-              })}
-            </g>
-          )}
-
-          {/* Priority Repairs Indicators */}
-          {(activeLayer === 'all' || activeLayer === 'repairs') && (
-            <g>
-              {priorities.map((prio) => {
-                const cx = (prio.coordinates.x / 100) * 1000;
-                const cy = (prio.coordinates.y / 100) * 650;
-                const isSelected = selectedItem?.id === prio.id;
-
-                return (
-                  <g
-                    key={prio.id}
-                    className="cursor-pointer transition-transform hover:scale-110"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      onSelectItem(prio);
-                    }}
-                    onMouseEnter={() => setHoveredItem(prio)}
-                    onMouseLeave={() => setHoveredItem(null)}
-                  >
-                    {/* Urgency Pulsing Ring */}
-                    <circle
-                      cx={cx}
-                      cy={cy}
-                      r={isSelected ? "22" : "16"}
-                      fill="none"
-                      stroke="#ef4444"
-                      strokeWidth={isSelected ? "3" : "1.5"}
-                      strokeOpacity="0.7"
-                      className="animate-ping"
-                      style={{ animationDuration: '3s' }}
-                    />
-                    <circle
-                      cx={cx}
-                      cy={cy}
-                      r="12"
-                      fill="#991b1b"
-                      stroke="#f87171"
-                      strokeWidth="2"
-                    />
-                    <text
-                      x={cx}
-                      y={cy + 4}
-                      textAnchor="middle"
-                      className="fill-white font-mono text-[10px] font-bold pointer-events-none"
-                    >
-                      #{prio.rank}
-                    </text>
-                  </g>
-                );
-              })}
-            </g>
-          )}
-
-          {/* Citizen Issue Reports Markers */}
-          {(activeLayer === 'all' || activeLayer === 'reports') && (
-            <g>
-              {filteredReports.map((report) => {
-                const cx = (report.coordinates.x / 100) * 1000;
-                const cy = (report.coordinates.y / 100) * 650;
-                const isSelected = selectedItem?.id === report.id;
-                const isCritical = report.severity === 'critical';
-
-                return (
-                  <g
-                    key={report.id}
-                    className="cursor-pointer transition-transform hover:scale-125"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      onSelectItem(report);
-                    }}
-                    onMouseEnter={() => setHoveredItem(report)}
-                    onMouseLeave={() => setHoveredItem(null)}
-                  >
-                    {isCritical && (
-                      <circle
-                        cx={cx}
-                        cy={cy}
-                        r="14"
-                        fill="#ef4444"
-                        fillOpacity="0.25"
-                        stroke="#ef4444"
-                        strokeWidth="1"
-                        className="animate-pulse"
-                      />
-                    )}
-                    <circle
-                      cx={cx}
-                      cy={cy}
-                      r={isSelected ? "9" : "7"}
-                      fill={isCritical ? "#dc2626" : "#f59e0b"}
-                      stroke="#1c1917"
-                      strokeWidth="2"
-                    />
-                  </g>
-                );
-              })}
-            </g>
-          )}
-
-          {/* Strategic Facilities Markers (New Hospitals / Technician Depots) */}
-          {(activeLayer === 'all' || activeLayer === 'facilities') && (
-            <g>
-              {strategicSites.map((site) => {
-                const cx = (site.coordinates.x / 100) * 1000;
-                const cy = (site.coordinates.y / 100) * 650;
-                const isSelected = selectedItem?.id === site.id;
-                const isHospital = site.type === 'hospital';
-
-                return (
-                  <g
-                    key={site.id}
-                    className="cursor-pointer transition-transform hover:scale-110"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      onSelectItem(site);
-                    }}
-                    onMouseEnter={() => setHoveredItem(site)}
-                    onMouseLeave={() => setHoveredItem(null)}
-                  >
-                    {/* Diamond or Hexagon container */}
-                    <rect
-                      x={cx - 14}
-                      y={cy - 14}
-                      width="28"
-                      height="28"
-                      rx="6"
-                      transform={`rotate(45 ${cx} ${cy})`}
-                      fill={isHospital ? "#065f46" : "#075985"}
-                      stroke={isHospital ? "#34d399" : "#38bdf8"}
-                      strokeWidth={isSelected ? "3" : "1.5"}
-                    />
-                    {isHospital ? (
-                      <path
-                        d={`M ${cx - 6} ${cy} L ${cx + 6} ${cy} M ${cx} ${cy - 6} L ${cx} ${cy + 6}`}
-                        stroke="#ffffff"
-                        strokeWidth="2.5"
-                        strokeLinecap="round"
-                      />
-                    ) : (
-                      <circle cx={cx} cy={cy} r="4" fill="#ffffff" />
-                    )}
-                  </g>
-                );
-              })}
-            </g>
-          )}
-        </svg>
-
-        {/* Floating Compass / Scale Indicator */}
-        <div className="absolute bottom-4 left-4 z-10 bg-stone-900/90 backdrop-blur-md px-3 py-2 rounded-lg border border-stone-800 text-stone-400 font-mono text-[11px] flex items-center gap-4">
+    <div className="relative w-full h-[680px] lg:h-[780px] bg-stone-950 border border-stone-800 rounded-2xl overflow-hidden shadow-2xl flex flex-col font-sans select-none">
+      
+      {/* 1. Sleek Top Glassmorphism Control Bar */}
+      <header className="z-30 bg-stone-950/90 backdrop-blur-md px-4 py-3 border-b border-stone-800 flex flex-wrap items-center justify-between gap-3">
+        <div className="flex items-center gap-3">
           <div className="flex items-center gap-2">
-            <span className="font-bold text-stone-200">N</span>
-            <div className="w-12 h-1 bg-stone-700 relative">
-              <div className="absolute top-0 left-0 w-6 h-full bg-stone-400" />
-            </div>
-            <span>10 km</span>
+            <span className="w-2.5 h-2.5 rounded-full bg-emerald-500 animate-pulse"></span>
+            <h2 className="text-sm font-bold text-white tracking-tight flex items-center gap-1.5">
+              <span>NeedMap Real GIS Engine</span>
+              <span className="px-2 py-0.5 rounded bg-blue-950 border border-blue-800 text-blue-300 text-[10px] font-mono">
+                Satellite & 3D Tilt Mode
+              </span>
+            </h2>
           </div>
-          <span className="hidden sm:inline text-stone-600">|</span>
-          <span className="hidden sm:inline text-stone-500">NAD83 County Plane</span>
         </div>
 
-        {/* Hover Tooltip Preview */}
-        {hoveredItem && !selectedItem && (
-          <div 
-            className="absolute z-30 pointer-events-none bg-stone-900/95 backdrop-blur-md border border-stone-700 rounded-lg p-2.5 text-xs shadow-xl max-w-xs transition-opacity"
-            style={{
-              left: `${Math.min(Math.max((hoveredItem.coordinates?.x || 50), 10), 75)}%`,
-              top: `${Math.min(Math.max((hoveredItem.coordinates?.y || 50) - 14, 8), 80)}%`,
-            }}
+        {/* Map View Mode Switches */}
+        <div className="flex items-center gap-2">
+          {/* Tile Layer Selector */}
+          <div className="flex items-center gap-1 bg-stone-900/80 p-1 rounded-lg border border-stone-800 text-xs">
+            <button
+              onClick={() => setMapTileStyle('satellite')}
+              className={`px-2.5 py-1 rounded font-medium transition-colors ${
+                mapTileStyle === 'satellite' ? 'bg-blue-600 text-white shadow-sm' : 'text-stone-400 hover:text-stone-200'
+              }`}
+            >
+              🛰️ Satellite
+            </button>
+            <button
+              onClick={() => setMapTileStyle('dark')}
+              className={`px-2.5 py-1 rounded font-medium transition-colors ${
+                mapTileStyle === 'dark' ? 'bg-stone-800 text-stone-100 shadow-sm' : 'text-stone-400 hover:text-stone-200'
+              }`}
+            >
+              🌙 Dark Vector
+            </button>
+            <button
+              onClick={() => setMapTileStyle('topo')}
+              className={`px-2.5 py-1 rounded font-medium transition-colors ${
+                mapTileStyle === 'topo' ? 'bg-stone-800 text-amber-300 shadow-sm' : 'text-stone-400 hover:text-stone-200'
+              }`}
+            >
+              ⛰️ Topo
+            </button>
+          </div>
+
+          {/* COOL 3D TERRAIN TILT TOGGLE */}
+          <button
+            onClick={() => setIs3DMode(!is3DMode)}
+            className={`px-3 py-1.5 text-xs font-mono font-bold rounded-lg border flex items-center gap-1.5 transition-all ${
+              is3DMode
+                ? 'bg-gradient-to-r from-purple-600 to-blue-600 text-white border-purple-400 shadow-lg shadow-purple-500/20'
+                : 'bg-stone-900 text-stone-400 border-stone-800 hover:text-white'
+            }`}
           >
-            <p className="font-semibold text-stone-100">{hoveredItem.title || hoveredItem.name || hoveredItem.assetName}</p>
-            <p className="text-stone-400 text-[11px] mt-0.5 line-clamp-2">
-              {hoveredItem.description || hoveredItem.rationale || hoveredItem.keyJustification}
-            </p>
+            <Box className={`w-3.5 h-3.5 ${is3DMode ? 'animate-bounce' : ''}`} />
+            <span>{is3DMode ? '3D Tilt ON (38° Pitch)' : '2D Flat View'}</span>
+          </button>
+        </div>
+      </header>
+
+      {/* 2. Main GIS Real Map Container with 3D Tilt Transform */}
+      <div className="relative flex-1 w-full h-full overflow-hidden bg-stone-950 perspective-1000">
+        
+        {/* Real Leaflet Map Wrapper with 3D Pitch/Tilt Transform */}
+        <div
+          ref={mapContainerRef}
+          className="w-full h-full transition-transform duration-700 ease-out z-0"
+          style={{
+            transform: is3DMode
+              ? `rotateX(${pitchAngle}deg) rotateZ(${rotationAngle}deg) scale(1.15)`
+              : 'rotateX(0deg) rotateZ(0deg) scale(1.0)',
+            transformOrigin: '50% 60%',
+          }}
+        />
+
+        {/* 3D Tilt Control Angle Slider Bar (Visible in 3D mode) */}
+        {is3DMode && (
+          <div className="absolute top-4 left-1/2 -translate-x-1/2 z-20 bg-stone-900/90 backdrop-blur-md px-4 py-2 rounded-full border border-purple-500/40 text-xs font-mono text-stone-200 flex items-center gap-3 shadow-2xl">
+            <span className="text-purple-300 font-bold flex items-center gap-1">
+              <RotateCw className="w-3.5 h-3.5" /> 3D Perspective Pitch:
+            </span>
+            <input
+              type="range"
+              min="0"
+              max="55"
+              value={pitchAngle}
+              onChange={(e) => setPitchAngle(Number(e.target.value))}
+              className="w-24 accent-purple-500 cursor-pointer"
+            />
+            <span className="text-purple-400 font-bold">{pitchAngle}°</span>
+
+            <span className="text-stone-600">|</span>
+            <span className="text-stone-400">Rotate Z:</span>
+            <input
+              type="range"
+              min="-45"
+              max="45"
+              value={rotationAngle}
+              onChange={(e) => setRotationAngle(Number(e.target.value))}
+              className="w-20 accent-blue-500 cursor-pointer"
+            />
+            <span className="text-blue-400 font-bold">{rotationAngle}°</span>
           </div>
         )}
 
-        {/* Selected Item Drawer / Dossier Modal */}
-        {selectedItem && (() => {
-          const item = selectedItem as any;
-          return (
-            <div className="absolute bottom-4 right-4 z-30 w-80 sm:w-96 bg-stone-900/95 backdrop-blur-md border border-stone-700 rounded-xl p-4 shadow-2xl text-xs text-stone-200 animate-in fade-in slide-in-from-bottom-3 duration-200">
-              <div className="flex items-start justify-between gap-2 border-b border-stone-800 pb-2.5">
-                <div>
-                  <span className="text-[11px] font-mono uppercase tracking-wider text-emerald-400">
-                    {item.categoryLabel || item.infrastructureType || 'Infrastructure Asset'}
+        {/* LEFT FLOATING PANEL: Top Candidate Sites Ranking List (Matches Reference Image) */}
+        <div className="absolute top-4 left-4 z-20 w-80 max-h-[88%] bg-stone-950/90 backdrop-blur-xl border border-stone-800/90 rounded-xl p-3.5 shadow-2xl flex flex-col text-xs text-stone-200 animate-in fade-in slide-in-from-left duration-300">
+          <div className="flex items-center justify-between border-b border-stone-800 pb-2.5">
+            <label className="flex items-center gap-2 cursor-pointer text-stone-200 font-medium">
+              <input
+                type="checkbox"
+                checked={updateOnMove}
+                onChange={(e) => setUpdateOnMove(e.target.checked)}
+                className="rounded bg-stone-900 border-stone-700 text-blue-500 focus:ring-blue-500"
+              />
+              <span>Update as I move map</span>
+            </label>
+            <span className="text-[10px] font-mono text-stone-400">Best sites in area</span>
+          </div>
+
+          <div className="flex-1 overflow-y-auto mt-2.5 space-y-2 pr-1">
+            {candidateList.map((site) => (
+              <div
+                key={site.id}
+                onClick={() => handleSelectCandidate(site)}
+                className="p-2.5 rounded-lg bg-stone-900/80 hover:bg-stone-800 border border-stone-800/80 hover:border-blue-500/50 cursor-pointer transition-all flex items-center justify-between gap-2 group"
+              >
+                <div className="flex items-center gap-2.5 min-w-0">
+                  <span className={`w-6 h-6 rounded-full shrink-0 font-bold font-mono text-[11px] flex items-center justify-center ${
+                    site.rank <= 3 ? 'bg-blue-600 text-white' : 'bg-stone-800 text-stone-300'
+                  }`}>
+                    {site.rank}
                   </span>
-                  <h3 className="font-bold text-sm text-white mt-0.5">
-                    {item.title || item.name || item.assetName}
-                  </h3>
-                </div>
-                <button
-                  onClick={() => onSelectItem(null)}
-                  className="text-stone-400 hover:text-white p-1 rounded-md hover:bg-stone-800"
-                >
-                  <X className="w-4 h-4" />
-                </button>
-              </div>
-
-              {/* Photo preview if present */}
-              {item.photoUrl && !isLiteMode && (
-                <div className="mt-2.5 rounded-lg overflow-hidden border border-stone-800 h-28 relative">
-                  <img
-                    src={item.photoUrl}
-                    alt="Infrastructure inspection"
-                    className="w-full h-full object-cover"
-                    referrerPolicy="no-referrer"
-                  />
-                  <div className="absolute bottom-1 right-1 bg-stone-950/80 px-1.5 py-0.5 rounded text-[10px] font-mono text-stone-300">
-                    Field Photo
+                  <div className="truncate">
+                    <h4 className="font-bold text-stone-100 group-hover:text-blue-300 transition-colors truncate">
+                      {site.name}
+                    </h4>
+                    <p className="text-[10px] text-stone-400 truncate">
+                      {site.populationWithin30Min.toLocaleString()} newly within 30m · {site.beds} beds
+                    </p>
                   </div>
                 </div>
-              )}
-
-              {/* Description / Rationale */}
-              <p className="mt-2.5 text-stone-300 leading-relaxed text-[11px]">
-                {item.description || item.rationale || item.keyJustification}
-              </p>
-
-              {/* Quantitative Data Matrix */}
-              <div className="grid grid-cols-2 gap-2 mt-3 pt-2.5 border-t border-stone-800/80 font-mono text-[11px]">
-                {item.affectedHouseholds !== undefined && (
-                  <div className="flex items-center gap-1.5 text-stone-400">
-                    <Users className="w-3.5 h-3.5 text-stone-500" />
-                    <span>{item.affectedHouseholds} households</span>
-                  </div>
-                )}
-                {item.avgTravelTimeReductionMin !== undefined && (
-                  <div className="flex items-center gap-1.5 text-emerald-400">
-                    <Clock className="w-3.5 h-3.5 text-emerald-500" />
-                    <span>-{item.avgTravelTimeReductionMin}m transit</span>
-                  </div>
-                )}
-                {item.degradationScore !== undefined && (
-                  <div className="flex items-center gap-1.5 text-amber-400">
-                    <AlertTriangle className="w-3.5 h-3.5 text-amber-500" />
-                    <span>Degradation: {item.degradationScore}/100</span>
-                  </div>
-                )}
-                {item.estimatedCostUsd !== undefined && (
-                  <div className="flex items-center gap-1.5 text-stone-300">
-                    <span>Est: ${item.estimatedCostUsd.toLocaleString()}</span>
-                  </div>
-                )}
-              </div>
-
-              {/* Action buttons */}
-              <div className="mt-3 pt-2.5 border-t border-stone-800 flex items-center justify-between gap-2">
-                {item.upvotes !== undefined ? (
-                  <button
-                    onClick={() => onUpvoteReport(item.id)}
-                    className="flex items-center gap-1.5 px-3 py-1.5 rounded-md bg-stone-800 hover:bg-stone-700 text-stone-200 transition-colors"
-                  >
-                    <ThumbsUp className="w-3.5 h-3.5 text-emerald-400" />
-                    <span>Confirm / Upvote ({item.upvotes})</span>
-                  </button>
-                ) : (
-                  <span className="text-[11px] font-mono text-stone-400">
-                    Priority Score: {item.priorityScore || item.urgencyScore}%
-                  </span>
-                )}
-
-                <span className="text-[10px] font-mono text-stone-500">
-                  Lat: {item.coordinates?.lat}
+                <span className="text-sm font-bold font-mono text-blue-400 shrink-0">
+                  {site.score}
                 </span>
               </div>
+            ))}
+          </div>
+        </div>
+
+        {/* RIGHT FLOATING PANEL: Model Weights & Interactive Sliders (Matches Reference Image) */}
+        <div className="absolute top-4 right-4 z-20 w-80 max-h-[90%] bg-stone-950/90 backdrop-blur-xl border border-stone-800/90 rounded-xl p-4 shadow-2xl flex flex-col text-xs text-stone-200 overflow-y-auto animate-in fade-in slide-in-from-right duration-300 space-y-3.5">
+          
+          {/* Header Status Badge */}
+          <div className="flex items-center justify-between">
+            <span className="text-[10px] font-mono text-blue-400 font-bold flex items-center gap-1">
+              <span className="w-1.5 h-1.5 rounded-full bg-blue-400 animate-ping"></span>
+              Ranking Stage 8 candidate sites...
+            </span>
+          </div>
+
+          {/* Region Selector */}
+          <div>
+            <label className="text-[10px] font-mono text-stone-400 uppercase tracking-wider block mb-1">
+              REGION / PRECINCT
+            </label>
+            <select
+              value={regionFilter}
+              onChange={(e) => setRegionFilter(e.target.value)}
+              className="w-full bg-stone-900 border border-stone-700 rounded-lg p-2 text-xs text-white focus:border-blue-500 focus:outline-none"
+            >
+              <option value="all">Idaho Precincts 4 & 7 (628 candidate sites)</option>
+              <option value="missouri">Missouri (628 candidate sites)</option>
+              <option value="oklahoma">Oklahoma Region</option>
+            </select>
+          </div>
+
+          {/* Model Weights Preset Buttons */}
+          <div>
+            <div className="flex items-center justify-between mb-1.5">
+              <label className="text-[10px] font-mono text-stone-400 uppercase tracking-wider block">
+                MODEL WEIGHTS PRESETS
+              </label>
+              <button
+                onClick={() => applyPreset('balanced')}
+                className="text-[10px] text-blue-400 hover:underline font-mono"
+              >
+                Reset
+              </button>
             </div>
-          );
-        })()}
+
+            <div className="flex flex-wrap gap-1.5">
+              {(Object.keys(WEIGHT_PRESETS) as Array<keyof typeof WEIGHT_PRESETS>).map((key) => (
+                <button
+                  key={key}
+                  onClick={() => applyPreset(key)}
+                  className={`px-2.5 py-1 rounded-md text-[11px] font-medium capitalize transition-all ${
+                    activePreset === key
+                      ? 'bg-blue-600 text-white font-semibold shadow-sm'
+                      : 'bg-stone-900 text-stone-400 hover:bg-stone-800'
+                  }`}
+                >
+                  {key.replace(/([A-Z])/g, ' $1')}
+                </button>
+              ))}
+            </div>
+            <p className="text-[10px] text-stone-400 mt-1">Custom mix from the sliders below.</p>
+          </div>
+
+          {/* Sliders List */}
+          <div className="space-y-2.5 pt-1 border-t border-stone-800">
+            {/* Slider 1: People Helped */}
+            <div>
+              <div className="flex items-center justify-between text-[11px] mb-0.5">
+                <span className="font-semibold text-stone-200">People helped</span>
+                <span className="font-mono text-blue-400 font-bold">{weights.peopleHelped}%</span>
+              </div>
+              <input
+                type="range"
+                min="0"
+                max="50"
+                value={weights.peopleHelped}
+                onChange={(e) => {
+                  setActivePreset('balanced');
+                  setWeights({ ...weights, peopleHelped: Number(e.target.value) });
+                }}
+                className="w-full accent-blue-500 cursor-pointer h-1.5 bg-stone-800 rounded-lg"
+              />
+              <p className="text-[9px] text-stone-400">Drive time saved across everyone nearby</p>
+            </div>
+
+            {/* Slider 2: Remoteness */}
+            <div>
+              <div className="flex items-center justify-between text-[11px] mb-0.5">
+                <span className="font-semibold text-stone-200">Remoteness</span>
+                <span className="font-mono text-blue-400 font-bold">{weights.remoteness}%</span>
+              </div>
+              <input
+                type="range"
+                min="0"
+                max="50"
+                value={weights.remoteness}
+                onChange={(e) => {
+                  setActivePreset('balanced');
+                  setWeights({ ...weights, remoteness: Number(e.target.value) });
+                }}
+                className="w-full accent-blue-500 cursor-pointer h-1.5 bg-stone-800 rounded-lg"
+              />
+              <p className="text-[9px] text-stone-400">Distance from existing hospital/outpost</p>
+            </div>
+
+            {/* Slider 3: Bed Shortage */}
+            <div>
+              <div className="flex items-center justify-between text-[11px] mb-0.5">
+                <span className="font-semibold text-stone-200">Bed / Facility shortage</span>
+                <span className="font-mono text-blue-400 font-bold">{weights.bedShortage}%</span>
+              </div>
+              <input
+                type="range"
+                min="0"
+                max="50"
+                value={weights.bedShortage}
+                onChange={(e) => {
+                  setActivePreset('balanced');
+                  setWeights({ ...weights, bedShortage: Number(e.target.value) });
+                }}
+                className="w-full accent-blue-500 cursor-pointer h-1.5 bg-stone-800 rounded-lg"
+              />
+            </div>
+
+            {/* Slider 4: Community Need / SVI */}
+            <div>
+              <div className="flex items-center justify-between text-[11px] mb-0.5">
+                <span className="font-semibold text-stone-200">Community need (SVI)</span>
+                <span className="font-mono text-blue-400 font-bold">{weights.communityNeed}%</span>
+              </div>
+              <input
+                type="range"
+                min="0"
+                max="50"
+                value={weights.communityNeed}
+                onChange={(e) => {
+                  setActivePreset('balanced');
+                  setWeights({ ...weights, communityNeed: Number(e.target.value) });
+                }}
+                className="w-full accent-blue-500 cursor-pointer h-1.5 bg-stone-800 rounded-lg"
+              />
+            </div>
+          </div>
+        </div>
+
+        {/* BOTTOM LEFT FLOATING LEGEND (Matches Reference Image) */}
+        <div className="absolute bottom-4 left-4 z-20 bg-stone-950/90 backdrop-blur-md p-3 rounded-xl border border-stone-800 text-xs font-mono text-stone-300 shadow-2xl space-y-2">
+          <div className="font-bold text-white text-[11px] border-b border-stone-800 pb-1">Legend</div>
+          
+          <div className="space-y-1 text-[10px]">
+            <div className="flex items-center gap-2">
+              <span className="w-2.5 h-2.5 rounded-full bg-red-500 border border-white"></span>
+              <span>Existing hospital / clinic</span>
+            </div>
+            <div className="flex items-center gap-2">
+              <span className="w-2.5 h-2.5 rounded-full bg-blue-500 ring-2 ring-blue-400/50"></span>
+              <span>Recommended candidate site (rank)</span>
+            </div>
+          </div>
+
+          <div className="pt-1.5">
+            <span className="text-[9px] text-stone-400 block mb-0.5">Score Scale</span>
+            <div className="w-32 h-2 rounded bg-gradient-to-r from-blue-600 via-amber-500 to-red-600"></div>
+            <div className="flex justify-between text-[8px] text-stone-400 mt-0.5">
+              <span>Low (70)</span>
+              <span>High (99)</span>
+            </div>
+          </div>
+        </div>
+
       </div>
 
-      {/* Bottom Map Status Strip */}
-      <div className="bg-stone-950 px-4 py-2 border-t border-stone-800/80 flex flex-wrap items-center justify-between text-xs text-stone-400 font-mono gap-2">
-        <div className="flex items-center gap-3">
-          <span>Active Reports: <strong className="text-stone-200">{reports.length}</strong></span>
-          <span className="text-stone-700">·</span>
-          <span>Emergency Blocks: <strong className="text-red-400">{reports.filter(r => r.emergencyAccessBlocked).length}</strong></span>
-          <span className="text-stone-700">·</span>
-          <span>Recommended Facilities: <strong className="text-emerald-400">{strategicSites.length}</strong></span>
-        </div>
-        <div className="text-[11px] text-stone-500">
-          Click any pin on terrain to view engineering rationale & civic status
-        </div>
-      </div>
+      {/* 3. Footer Strip */}
+      <footer className="bg-stone-950 px-4 py-2 border-t border-stone-800 flex items-center justify-between text-xs text-stone-400 font-mono">
+        <div>Real Map Source: Esri World Imagery & OpenStreetMap | 3D Canvas Matrix</div>
+        <div className="text-emerald-400 font-bold">100% Interactive Multi-Criteria Decision Model</div>
+      </footer>
     </div>
   );
 };
