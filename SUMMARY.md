@@ -36,10 +36,12 @@ In rural precincts, infrastructure failures—like culvert washouts, bridge abut
 - **Store-and-Forward Offline Engine**: Built-in queue stores reports locally when offline (`localStorage`) and automatically syncs with the server when reconnected.
 - **Simple, High-Contrast UI**: Designed with large touch targets, voice-assisted input options, and a simple 3-step reporting wizard for rural residents.
 
-### 2. 🗺️ Interactive GIS Control Panel & Map
-- **Precinct Boundary Visualizations**: Precise mapping for rural districts (Precincts 4 & 7).
-- **Interactive Layer Toggles**: Filter between active citizen reports, high-priority repair crews, AI-predicted hazard hotspots, and candidate clinic/depot sites.
-- **Dynamic Pin-Dropping**: Tap any spot on the map to pinpoint damaged culverts or flooded access roads.
+### 2. 🗺️ Real Satellite GIS Map & 3D Perspective Engine (Reference Design Match)
+- **Real Satellite & Vector Map Tiles**: Powered by Leaflet with Esri World Imagery Satellite, CartoDB Dark Vector, and OpenTopoMap tile providers with real latitude/longitude coordinates.
+- **Cool 3D Terrain Perspective Tilt Feature**: Toggleable 3D perspective pitch (0° to 55° pitch angle control), rotation Z axis slider, and depth shadow rendering.
+- **Left Floating Glassmorphism Panel (Ranked Candidate Sites)**: Real-time top candidate sites list matching reference UI (`#1 Pittsburg County`, `#2 Dixie County`, `#3 Pine Crossroads`...) with live score readouts and population coverage.
+- **Right Floating Glassmorphism Panel (Model Weights Sliders)**: Preset buttons (`Balanced`, `Most people`, `Remote areas`, `High-need communities`, `Best value`) and interactive sliders (*People helped %*, *Remoteness %*, *Bed shortage %*, *Community need %*) that dynamically update candidate site scores and heatmap intensities in real-time.
+- **Bottom Left Floating Legend**: Symbol guide (`Existing hospital`, `Recommended candidate site`), score gradient ramp, and heat circle density overlays.
 
 ### 3. 🧬 MedMap-Adapted 8-Stage Spatial Data & Optimization Pipeline
 - **Stage 1: Raw Staging**: Ingests CMS Facility Registries, Census ACS 5-Year, CDC PLACES, CDC Social Vulnerability Index (SVI), USDA RUCA codes, AHRF County Data, HRSA HPSA/MUA/P shortage areas, and low-data field reports.
