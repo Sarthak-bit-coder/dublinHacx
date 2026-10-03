@@ -41,10 +41,15 @@ In rural precincts, infrastructure failures—like culvert washouts, bridge abut
 - **Interactive Layer Toggles**: Filter between active citizen reports, high-priority repair crews, AI-predicted hazard hotspots, and candidate clinic/depot sites.
 - **Dynamic Pin-Dropping**: Tap any spot on the map to pinpoint damaged culverts or flooded access roads.
 
-### 3. 🤖 AI Pattern Detection & Strategic Siting (Google Gemini)
-- **Hotspot Detection**: Analyzes individual civic reports to identify larger systemic threats (e.g., dual road washouts isolating a mountain valley).
-- **Strategic Health & Depot Placement**: Computes optimal geographic coordinates for new **Rural Health Outposts** and **Technician Emergency Depots** to minimize travel times.
-- **Heuristic Fallback**: Includes a built-in offline heuristic engine to deliver AI insights even without a Gemini API key.
+### 3. 🧬 MedMap-Adapted 8-Stage Spatial Data & Optimization Pipeline
+- **Stage 1: Raw Staging**: Ingests CMS Facility Registries, Census ACS 5-Year, CDC PLACES, CDC Social Vulnerability Index (SVI), USDA RUCA codes, AHRF County Data, HRSA HPSA/MUA/P shortage areas, and low-data field reports.
+- **Stage 2: Normalization**: Cleans, validates schemas, and standardizes data into uniform spatial GeoParquet tables.
+- **Stage 3: Geography & Geocoding**: Geocodes locations via Census Geocoder + OpenStreetMap fallbacks, joining directly to 2023 Census Tracts & County Precincts (Precincts 4 & 7).
+- **Stage 4: ACS Demographics Enrichment**: Adds tract-level population, median income, elderly (>65) ratio, and health insurance coverage metrics.
+- **Stage 5: Screening Features**: Builds multi-dimensional infrastructure need-and-access risk profiles for every tract combining SVI vulnerability and emergency road blockages.
+- **Stage 6: Candidate Site Shortlisting**: Shortlists underserved tracts and generates candidate facility/depot sites, adjusting travel times for rural unpaved gravel vs paved highways.
+- **Stage 7: Multi-Criteria Optimization**: Ranks candidate sites using weighted scores: *Access Improvement*, *Capacity Fit*, *SVI Vulnerability Weight*, *Configuration Fit*, and *Cost Efficiency*.
+- **Stage 8: Final Enrichment & Checksummed Snapshots**: Refines 15m/30m drive access isochrones, assigns targeted medical/repair service packages, and outputs versioned SHA-256 checksummed snapshots (`sha256-v24...`) for 100% reproducible audit trails.
 
 ### 4. 🛠️ Algorithmic Priority Repair Queue
 - **Multi-Factor Priority Scoring**: Scores assets based on degradation level, isolation risk (e.g., cutting off schools or ambulances), and population affected.
