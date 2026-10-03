@@ -30,10 +30,11 @@ In rural precincts, infrastructure failures—like culvert washouts, bridge abut
 └───────────┘                  └───────────────┘                └──────────────┘
 ```
 
-### 1. 📱 Ultra-Low-Data "Lite" Field Reporter App
-- **Optimized for Edge Networks**: Stripped down to essential text & compressed image reporting to preserve cellular data.
+### 1. 📱 Ultra-Low-Data "Lite" Field Reporter Mobile App
+- **Strict < 50 KB Request Guarantee**: Enforces payload size limits on all outgoing JSON requests (typically ~1.2 KB to 2.5 KB per submission).
+- **Dedicated Server Endpoint (`/api/lite-reports`)**: Endpoint validates payload sizes, returns 413 if over 50 KB limit, and pushes reports directly to the main dashboard stream.
 - **Store-and-Forward Offline Engine**: Built-in queue stores reports locally when offline (`localStorage`) and automatically syncs with the server when reconnected.
-- **Accessibility Modes**: Large touch targets, voice-assisted input options, and simplified 3-step reporting.
+- **Simple, High-Contrast UI**: Designed with large touch targets, voice-assisted input options, and a simple 3-step reporting wizard for rural residents.
 
 ### 2. 🗺️ Interactive GIS Control Panel & Map
 - **Precinct Boundary Visualizations**: Precise mapping for rural districts (Precincts 4 & 7).
