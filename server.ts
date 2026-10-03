@@ -311,7 +311,56 @@ app.get('/api/reports', (_req, res) => {
   });
 });
 
-// API: Create new report (from Main app or Lite app)
+// API: Dedicated Low-Bandwidth Endpoint for Rural Mobile App (< 50 KB payload guarantee)
+app.post('/api/lite-reports', (req, res) => {
+  try {
+    const payloadStr = JSON.stringify(req.body);
+    const sizeInBytes = Buffer.byteLength(payloadStr, 'utf8');
+    const sizeInKB = Math.round((sizeInBytes / 1024) * 100) / 100;
+
+    // Strict 50 KB safety limit check for rural low-data network requests
+    if (sizeInBytes > 50 * 1024) {
+      return res.status(413).json({
+        error: 'Payload size exceeds the 50 KB rural network limit',
+        receivedKB: sizeInKB,
+        maxAllowedKB: 50.0,
+      });
+    }
+
+    const reportData = req.body;
+    if (!reportData.title || !reportData.category) {
+      return res.status(400).json({ error: 'Title and category are required' });
+    }
+
+    const newReport = {
+      ...reportData,
+      id: reportData.id || `lite-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
+      dateReported: reportData.dateReported || new Date().toISOString().split('T')[0],
+      upvotes: reportData.upvotes || 1,
+      verifiedCount: reportData.verifiedCount || 1,
+      status: reportData.status || 'pending_review',
+      sourceApp: 'lite_mobile_reporter',
+      payloadSizeBytes: sizeInBytes,
+      payloadSizeKB: sizeInKB,
+    };
+
+    storedReports.unshift(newReport);
+    console.log(`[Rural Mobile API] Received lightweight report: "${newReport.title}" (${sizeInKB} KB)`);
+
+    return res.status(201).json({
+      success: true,
+      report: newReport,
+      payloadSizeKB: sizeInKB,
+      maxAllowedKB: 50.0,
+      totalCount: storedReports.length,
+      message: `Successfully transmitted under 50KB limit (${sizeInKB} KB)`,
+    });
+  } catch (error: any) {
+    return res.status(500).json({ error: error.message || 'Failed to process mobile report' });
+  }
+});
+
+// API: Create new report (from Main app or generic client)
 app.post('/api/reports', (req, res) => {
   try {
     const reportData = req.body;

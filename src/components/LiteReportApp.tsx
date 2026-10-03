@@ -95,6 +95,8 @@ export const LiteReportApp: React.FC<LiteReportAppProps> = ({
     { id: 'telecom', label: 'Cell Signal / Tower', icon: Radio, defaultPhoto: '/src/assets/images/rural_road_damage_1791058378160.jpg' },
   ];
 
+  const [lastPayloadKB, setLastPayloadKB] = useState<number | null>(null);
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setIsSubmitting(true);
@@ -130,6 +132,11 @@ export const LiteReportApp: React.FC<LiteReportAppProps> = ({
       sourceApp: 'lite_mobile_reporter',
     };
 
+    // Calculate exact payload size in KB for transparency
+    const jsonStr = JSON.stringify(reportPayload);
+    const sizeKB = Math.round((new Blob([jsonStr]).size / 1024) * 100) / 100;
+    setLastPayloadKB(sizeKB);
+
     if (!isConnected) {
       // Offline mode: queue locally in localStorage
       syncService.enqueueReport(reportPayload);
@@ -138,12 +145,12 @@ export const LiteReportApp: React.FC<LiteReportAppProps> = ({
       setIsSubmitting(false);
       setSubmittedSuccessfully(true);
     } else {
-      // Online mode: submit directly to server API
+      // Online mode: submit directly to dedicated low-bandwidth mobile endpoint (< 50 KB limit)
       try {
-        const res = await fetch('/api/reports', {
+        const res = await fetch('/api/lite-reports', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(reportPayload),
+          body: jsonStr,
         });
         if (res.ok) {
           const data = await res.json();
@@ -195,25 +202,30 @@ export const LiteReportApp: React.FC<LiteReportAppProps> = ({
           </button>
         </div>
 
-        {/* Network & Offline Status Banner */}
+        {/* Network & Low-Data Status Banner */}
         <div className="max-w-md mx-auto mt-2 pt-2 border-t border-stone-800/80 flex items-center justify-between text-[11px] font-mono">
           <div className="flex items-center gap-1.5 text-stone-300">
             {syncService.isOnline() ? (
               <span className="flex items-center gap-1 text-emerald-400">
                 <Wifi className="w-3 h-3" />
-                <span>Connected</span>
+                <span>Connected (2G/3G)</span>
               </span>
             ) : (
               <span className="flex items-center gap-1 text-amber-400 font-semibold">
                 <WifiOff className="w-3 h-3" />
-                <span>Offline Mode (Queue Active)</span>
+                <span>Offline Mode (Queued)</span>
               </span>
             )}
           </div>
 
-          <span className="text-stone-400 text-[10px]">
-            {pendingCount > 0 ? `${pendingCount} item(s) in phone storage` : 'Phone storage synchronized'}
-          </span>
+          <div className="flex items-center gap-2">
+            <span className="px-1.5 py-0.5 rounded bg-emerald-950 border border-emerald-800 text-emerald-300 text-[10px] font-bold">
+              &lt; 50 KB Limit
+            </span>
+            <span className="text-stone-400 text-[10px]">
+              {pendingCount > 0 ? `${pendingCount} queued` : 'Sync ready'}
+            </span>
+          </div>
         </div>
       </header>
 
@@ -246,6 +258,12 @@ export const LiteReportApp: React.FC<LiteReportAppProps> = ({
               <div><strong className="text-stone-400">Severity:</strong> {severity.toUpperCase()}</div>
               <div><strong className="text-stone-400">District:</strong> {district}</div>
               <div><strong className="text-stone-400">Access Blocked:</strong> {emergencyBlocked ? 'YES (Emergency)' : 'No'}</div>
+              {lastPayloadKB !== null && (
+                <div className="pt-1.5 mt-1.5 border-t border-stone-800 text-emerald-400 flex items-center justify-between text-[11px]">
+                  <span>Data Usage:</span>
+                  <span className="font-bold">{lastPayloadKB} KB (Max &lt; 50 KB limit)</span>
+                </div>
+              )}
             </div>
 
             <div className="flex flex-col gap-2 pt-2">
