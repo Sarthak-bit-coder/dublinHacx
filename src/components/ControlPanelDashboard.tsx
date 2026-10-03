@@ -40,7 +40,6 @@ interface ControlPanelDashboardProps {
   onOpenLiteApp: () => void;
   onOpenWeatherModal?: () => void;
   onOpenCouncilPlan?: () => void;
-  onOpenPipelineModal?: () => void;
   onOpenUploadModal?: () => void;
   onUpvoteReport?: (reportId: string) => void;
   isEasyMode?: boolean;
@@ -58,7 +57,6 @@ export const ControlPanelDashboard: React.FC<ControlPanelDashboardProps> = ({
   onOpenLiteApp,
   onOpenWeatherModal,
   onOpenCouncilPlan,
-  onOpenPipelineModal,
   onOpenUploadModal,
   onUpvoteReport,
   isEasyMode = false,

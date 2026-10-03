@@ -1,4 +1,4 @@
-import { PipelineExecutionResult, CandidateSiteOptimization, PipelineStageStatus, IssueReport } from '../types';
+import { PipelineExecutionResult, CandidateSiteOptimization, PipelineStageStatus, IssueReport, StrategicSite, PriorityRepair } from '../types';
 
 /**
  * 8-Stage NeedMap Spatial Data & Optimization Pipeline Engine
@@ -227,3 +227,87 @@ export function runEightStageSpatialPipeline(reports: IssueReport[]): PipelineEx
     }
   };
 }
+
+/**
+ * Convert Stage 7/8 candidate optimizations into StrategicSite[] for the UI.
+ * Called internally by the app — not displayed to the user directly.
+ */
+export function candidatesToStrategicSites(
+  candidates: CandidateSiteOptimization[]
+): StrategicSite[] {
+  const typeMap: Record<number, StrategicSite['type']> = {
+    0: 'hospital',
+    1: 'technician_depot',
+    2: 'water_purification_hub',
+  };
+  const labelMap: Record<StrategicSite['type'], string> = {
+    hospital: 'Level IV Rural Hospital & Trauma Post',
+    technician_depot: 'Technician Hub & Heavy Equipment Depot',
+    mobile_clinic_post: 'Forward Telehealth & Preventive Clinic',
+    water_purification_hub: 'Solar Water Treatment Hub',
+  };
+
+  return candidates.map((cand, idx) => {
+    const type = typeMap[idx] ?? 'hospital';
+    return {
+      id: `pipeline-site-${cand.siteId}`,
+      type,
+      name: cand.candidateName,
+      categoryLabel: labelMap[type],
+      status: 'recommended_by_ai' as const,
+      coordinates: cand.coordinates,
+      coveragePopulation: Math.round(cand.accessImprovementScore * 60 + cand.vulnerabilityScore * 20),
+      avgTravelTimeReductionMin: cand.timeSavedMin,
+      keyJustification: `Pipeline Stage 7 optimization score ${cand.totalOptimizationScore}/100. Reduces rural drive time from ${cand.baselineDriveTimeMin} min to ${cand.adjustedDriveTimeMin} min. Services: ${cand.recommendedServices.slice(0, 2).join('; ')}.`,
+      estimatedCapExUsd: type === 'hospital' ? 1450000 : type === 'technician_depot' ? 420000 : 290000,
+      priorityScore: Math.round(cand.totalOptimizationScore),
+      district: cand.districtName,
+      recommendedEquipment: cand.recommendedServices,
+    };
+  });
+}
+
+/**
+ * Convert pipeline Stage 6 candidate sites into PriorityRepair entries for
+ * any critical unresolved reports passed in. Merges silently with existing queue.
+ */
+export function reportsToPriorityRepairs(
+  reports: IssueReport[],
+  existingIds: Set<string>
+): PriorityRepair[] {
+  const critical = reports.filter(
+    (r) =>
+      (r.severity === 'critical' || r.severity === 'high') &&
+      !existingIds.has(r.id) &&
+      r.status !== 'resolved'
+  );
+
+  return critical.map((r, idx) => ({
+    id: `pipeline-prio-${r.id}`,
+    reportId: r.id,
+    rank: 100 + idx, // pipeline-derived entries rank after manually curated ones
+    assetName: r.title,
+    district: r.districtName,
+    degradationScore: r.severity === 'critical' ? Math.min(99, 85 + r.upvotes * 0.1) : 72,
+    isolationRiskScore: r.emergencyAccessBlocked ? 90 : 65,
+    urgencyScore: r.severity === 'critical' ? 91 : 76,
+    estimatedCrewDays: r.severity === 'critical' ? 4 : 2,
+    requiredMachinery:
+      r.category === 'road' ? ['Road Grader', 'Steel Culvert'] :
+      r.category === 'bridge' ? ['Hydraulic Excavator', 'Concrete Pumper'] :
+      r.category === 'water' ? ['Submersible Pump', 'UV Filtration Skid'] :
+      r.category === 'power' ? ['Bucket Boom Truck', 'Replacement Pole'] :
+      ['Service Truck', 'Technician Crew'],
+    estimatedCostUsd: r.severity === 'critical' ? 22000 : 9500,
+    status: (r.severity === 'critical' ? 'urgent_dispatch' : 'queued') as PriorityRepair['status'],
+    locationName: r.locationName,
+    coordinates: {
+      x: r.coordinates.x,
+      y: r.coordinates.y,
+      lat: r.coordinates.lat,
+      lng: r.coordinates.lng,
+    },
+    rationale: r.description,
+  }));
+}
+

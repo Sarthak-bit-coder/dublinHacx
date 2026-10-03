@@ -22,12 +22,12 @@ import { PriorityRepairQueue } from './components/PriorityRepairQueue';
 import { IssueReportsList } from './components/IssueReportsList';
 import { StrategicPlacementPanel } from './components/StrategicPlacementPanel';
 import { CouncilActionPlanModal } from './components/CouncilActionPlanModal';
-import { SpatialPipelineModal } from './components/SpatialPipelineModal';
 import { CybersecurityModal } from './components/CybersecurityModal';
 import { UploadModal } from './components/upload/UploadModal';
 import { OfflineSyncIndicator } from './components/OfflineSyncIndicator';
 import { LiteReportApp } from './components/LiteReportApp';
 import { ControlPanelDashboard } from './components/ControlPanelDashboard';
+import { runEightStageSpatialPipeline, candidatesToStrategicSites, reportsToPriorityRepairs } from './services/pipelineEngine';
 import { 
   AlertTriangle, 
   Hospital, 
@@ -63,10 +63,10 @@ export default function App() {
   const [selectedItem, setSelectedItem] = useState<any>(null);
   const [isReportModalOpen, setIsReportModalOpen] = useState(false);
   const [isCouncilPlanOpen, setIsCouncilPlanOpen] = useState(false);
-  const [isPipelineModalOpen, setIsPipelineModalOpen] = useState(false);
   const [isSecurityModalOpen, setIsSecurityModalOpen] = useState(false);
   const [isUploadModalOpen, setIsUploadModalOpen] = useState(false);
   const [isLiteMode, setIsLiteMode] = useState(false);
+  const pipelineLastRunRef = React.useRef<string | null>(null);
   const [isEasyMode, setIsEasyMode] = useState(true); // Default to easy friendly mode for rural users
   const [droppedCoords, setDroppedCoords] = useState<{ x: number; y: number; lat: number; lng: number } | null>(null);
 
@@ -103,6 +103,37 @@ export default function App() {
   useEffect(() => {
     fetchServerReports();
   }, []);
+
+  // ─── Silent 8-Stage Spatial Pipeline ───────────────────────────────────────
+  // Runs on mount and whenever the report list changes.
+  // Outputs feed directly into strategicSites and priorities — nothing is shown
+  // to the user about the pipeline itself.
+  useEffect(() => {
+    const result = runEightStageSpatialPipeline(reports);
+
+    // Stage 7 + 8: update strategic facility sites from pipeline candidates
+    const pipelineSites = candidatesToStrategicSites(result.candidateOptimizations);
+    setStrategicSites((prev) => {
+      // Keep manually curated seed sites; replace any previous pipeline-derived ones
+      const manual = prev.filter((s) => !s.id.startsWith('pipeline-site-'));
+      return [...manual, ...pipelineSites];
+    });
+
+    // Stage 6: append priority repairs for any new critical/high reports not yet queued
+    setPriorities((prev) => {
+      const existingReportIds = new Set(prev.map((p) => p.reportId).filter(Boolean) as string[]);
+      const newRepairs = reportsToPriorityRepairs(reports, existingReportIds);
+      if (newRepairs.length === 0) return prev;
+      return [...prev, ...newRepairs];
+    });
+
+    pipelineLastRunRef.current = result.timestamp;
+    console.debug(
+      `[Pipeline] 8-stage run complete — ${result.stages.length} stages, ` +
+      `${result.candidateOptimizations.length} candidates, checksum: ${result.snapshotChecksum}`
+    );
+  }, [reports]);
+  // ──────────────────────────────────────────────────────────────────────────
 
   // Load weather impact telemetry on mount
   useEffect(() => {
@@ -260,7 +291,6 @@ export default function App() {
           setIsReportModalOpen(true);
         }}
         onOpenCouncilPlan={() => setIsCouncilPlanOpen(true)}
-        onOpenPipelineModal={() => setIsPipelineModalOpen(true)}
         onOpenSecurityModal={() => setIsSecurityModalOpen(true)}
         onOpenUploadModal={() => setIsUploadModalOpen(true)}
         onOpenLiteApp={() => setAppMode('lite')}
@@ -290,7 +320,6 @@ export default function App() {
             onOpenLiteApp={() => setAppMode('lite')}
             onOpenWeatherModal={() => setIsWeatherModalOpen(true)}
             onOpenCouncilPlan={() => setIsCouncilPlanOpen(true)}
-            onOpenPipelineModal={() => setIsPipelineModalOpen(true)}
             onOpenUploadModal={() => setIsUploadModalOpen(true)}
             onUpvoteReport={handleUpvoteReport}
             isEasyMode={isEasyMode}
@@ -501,12 +530,6 @@ export default function App() {
         clusters={clusters}
       />
 
-      {/* 8-Stage Spatial Data & Candidate Site Optimization Pipeline Modal */}
-      <SpatialPipelineModal
-        isOpen={isPipelineModalOpen}
-        onClose={() => setIsPipelineModalOpen(false)}
-        reports={reports}
-      />
 
       {/* Cybersecurity & Privacy Protection Shield Modal */}
       <CybersecurityModal
