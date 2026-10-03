@@ -1,0 +1,6 @@
+{
+  "name": "RuralGrid · Rural Infrastructure & Strategic Allocator",
+  "description": "Civic reporting, AI degradation pattern detection, and strategic resource allocation for rural road repairs, clinics, and technician outposts.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
