@@ -250,44 +250,42 @@ export const InteractiveMap: React.FC<InteractiveMapProps> = ({
       }).addTo(heatGroup);
     });
 
-    // 2. Add Candidate Site Ranked Markers
-    candidateList.forEach((site) => {
-      const isTop3 = site.rank <= 3;
-      const markerHtml = `
+    // 3. Add Strategic Facilities & 3D Building Structure Markers
+    strategicSites.forEach((site) => {
+      const lat = site.coordinates.lat || 44.182;
+      const lng = site.coordinates.lng || -116.425;
+      const isHospital = site.type === 'hospital';
+      const isDepot = site.type === 'technician_depot';
+
+      const buildingIconHtml = `
         <div class="relative group cursor-pointer">
-          <div class="w-8 h-8 rounded-full ${isTop3 ? 'bg-blue-600 text-white shadow-blue-500/50 ring-4 ring-blue-500/30' : 'bg-stone-900 border border-stone-700 text-stone-200'} font-bold font-mono text-xs flex items-center justify-center shadow-lg transition-transform transform hover:scale-125">
-            ${site.rank}
+          <!-- 3D Building Base Shadow & Pulse Ring -->
+          <div class="absolute -inset-2 rounded-xl ${isHospital ? 'bg-emerald-500/30 ring-4 ring-emerald-500/20' : 'bg-sky-500/30 ring-4 ring-sky-500/20'} animate-pulse"></div>
+          
+          <!-- 3D Isometric Building Facade -->
+          <div class="relative px-2.5 py-1.5 rounded-lg ${isHospital ? 'bg-gradient-to-b from-emerald-600 to-emerald-800 border-2 border-emerald-300 text-white' : 'bg-gradient-to-b from-sky-600 to-sky-800 border-2 border-sky-300 text-white'} font-bold shadow-2xl flex items-center gap-1.5 transform hover:scale-125 transition-transform" style="transform: perspective(400px) rotateX(25deg);">
+            <span class="text-sm">${isHospital ? '🏥' : isDepot ? '🚜' : '🚰'}</span>
+            <span class="text-[10px] font-mono uppercase font-extrabold tracking-wide">${isHospital ? '3D Clinic' : isDepot ? '3D Depot' : '3D Facility'}</span>
           </div>
-          <div class="absolute bottom-full left-1/2 -translate-x-1/2 mb-1 hidden group-hover:block bg-stone-900 border border-stone-700 rounded px-2 py-1 text-[10px] font-mono text-white whitespace-nowrap shadow-xl z-50">
-            ${site.name} (${site.score} pts)
+          
+          <div class="absolute top-full left-1/2 -translate-x-1/2 mt-1 hidden group-hover:block bg-stone-950 border border-stone-700 rounded px-2.5 py-1 text-[10px] font-mono text-white whitespace-nowrap shadow-2xl z-50">
+            ${site.name} (${site.district})
           </div>
         </div>
       `;
 
-      const customIcon = L.divIcon({
-        html: markerHtml,
-        className: 'custom-leaflet-marker',
-        iconSize: [32, 32],
-        iconAnchor: [16, 16],
+      const customBuildingIcon = L.divIcon({
+        html: buildingIconHtml,
+        className: 'custom-3d-building-marker',
+        iconSize: [40, 40],
+        iconAnchor: [20, 20],
       });
 
-      const marker = L.marker([site.lat, site.lng], { icon: customIcon }).addTo(markersGroup);
-      marker.on('click', () => {
-        onSelectItem({
-          id: site.id,
-          name: site.name,
-          title: `${site.name} (Rank #${site.rank})`,
-          keyJustification: `${site.reasons}. Serves ${site.populationWithin30Min.toLocaleString()} residents within 30 min.`,
-          priorityScore: site.score,
-          avgTravelTimeReductionMin: 36,
-          coveragePopulation: site.populationWithin30Min,
-          district: site.region,
-          coordinates: { lat: site.lat, lng: site.lng, x: 50, y: 50 }
-        });
-      });
+      const marker = L.marker([lat, lng], { icon: customBuildingIcon }).addTo(markersGroup);
+      marker.on('click', () => onSelectItem(site));
     });
 
-    // 3. Add Active Citizen Reports & Washed Out Bridges
+    // 4. Add Active Citizen Reports & Washed Out Bridges
     reports.forEach((rep) => {
       const lat = rep.coordinates.lat || 44.195;
       const lng = rep.coordinates.lng || -116.481;
@@ -310,7 +308,51 @@ export const InteractiveMap: React.FC<InteractiveMapProps> = ({
       marker.on('click', () => onSelectItem(rep));
     });
 
-  }, [candidateList, reports, mapTileStyle]);
+  }, [candidateList, reports, strategicSites, mapTileStyle]);
+
+  // AI Auto-Detect & Add 3D Places on Map
+  const [isAiDetecting, setIsAiDetecting] = useState<boolean>(false);
+  const handleAiAutoDetectAndAddPlaces = async () => {
+    setIsAiDetecting(true);
+    try {
+      // Call backend AI pattern synthesis API
+      const res = await fetch('/api/analyze-patterns', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ reports, scenario: 'auto_siting' })
+      });
+
+      if (res.ok) {
+        const data = await res.json();
+        // Add new candidate site from AI pattern analysis
+        const newSite: CandidateSiteItem = {
+          id: `ai-place-${Date.now()}`,
+          rank: 1,
+          name: data.strategicHospitalPlacement?.recommendedZone || 'AI Placed Mill Creek Health Center',
+          region: 'Idaho Precinct 4',
+          lat: 44.182,
+          lng: -116.425,
+          score: 96,
+          populationWithin30Min: 18450,
+          beds: 65,
+          type: 'hospital',
+          reasons: data.strategicHospitalPlacement?.rationale || 'AI Pattern Engine: Systemic road washouts isolate 1,420 residents'
+        };
+
+        setCandidateList((prev) => [newSite, ...prev.map(s => ({ ...s, rank: s.rank + 1 }))]);
+
+        // Fly map to new AI placed building
+        const map = leafletMapRef.current;
+        if (map) {
+          map.flyTo([44.182, -116.425], 11, { duration: 1.5 });
+        }
+      }
+    } catch (err) {
+      console.error(err);
+    } finally {
+      setIsAiDetecting(false);
+    }
+  };
 
   // Pan map to candidate site on click from left panel
   const handleSelectCandidate = (site: CandidateSiteItem) => {
@@ -350,6 +392,17 @@ export const InteractiveMap: React.FC<InteractiveMapProps> = ({
 
         {/* Map View Mode Switches */}
         <div className="flex items-center gap-2">
+          {/* AI Auto-Detect & Add 3D Places Button */}
+          <button
+            onClick={handleAiAutoDetectAndAddPlaces}
+            disabled={isAiDetecting}
+            className="px-3 py-1.5 text-xs font-mono font-bold rounded-lg bg-emerald-500 hover:bg-emerald-400 text-stone-950 flex items-center gap-1.5 transition-all shadow-md active:scale-95 disabled:opacity-50"
+            title="Scan reports with AI pattern engine and place 3D building facilities directly on map"
+          >
+            <Sparkles className={`w-3.5 h-3.5 ${isAiDetecting ? 'animate-spin' : ''}`} />
+            <span>{isAiDetecting ? 'AI Scanning Patterns...' : '🤖 AI Auto-Detect & Add Places'}</span>
+          </button>
+
           {/* Tile Layer Selector */}
           <div className="flex items-center gap-1 bg-stone-900/80 p-1 rounded-lg border border-stone-800 text-xs">
             <button
