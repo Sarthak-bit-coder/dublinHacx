@@ -1,513 +1,776 @@
-import React, { useState } from 'react';
-import { 
-  AlertTriangle, 
-  Hospital, 
-  Wrench, 
-  MapPin, 
-  TrendingUp, 
-  CheckCircle2, 
-  Users, 
-  Activity, 
-  ArrowRight, 
-  CloudRain, 
-  Droplets, 
-  RefreshCw, 
-  ShieldAlert, 
-  Smartphone, 
-  Clock, 
-  DollarSign, 
-  HardHat, 
-  Filter, 
-  Compass, 
-  FileText,
-  Sparkles,
-  Layers,
-  ChevronRight,
-  ThumbsUp
-} from 'lucide-react';
-import { IssueReport, PriorityRepair, StrategicSite, WeatherImpactData } from '../types';
-import { InteractiveMap } from './InteractiveMap';
+import { useEffect, useMemo, useRef, useState } from "react";
+import L from "leaflet";
+import "leaflet/dist/leaflet.css";
+import { collection, onSnapshot } from "firebase/firestore";
+import { db } from "../services/firebase";
 
-interface ControlPanelDashboardProps {
-  reports: IssueReport[];
-  priorities: PriorityRepair[];
-  strategicSites: StrategicSite[];
-  weatherData: WeatherImpactData | null;
-  onSelectReport: (report: IssueReport) => void;
-  onSelectRepair: (repair: PriorityRepair) => void;
-  onNavigateToMap: () => void;
-  onOpenReportModal: () => void;
-  onOpenLiteApp: () => void;
-  onOpenWeatherModal?: () => void;
-  onOpenCouncilPlan?: () => void;
-  onOpenUploadModal?: () => void;
-  onUpvoteReport?: (reportId: string) => void;
-  isEasyMode?: boolean;
+type Category =
+  | "all"
+  | "healthcare"
+  | "water"
+  | "transportation"
+  | "emergency_response"
+  | "food"
+  | "broadband"
+  | "other";
+
+type TimeRange = "all" | "24h" | "7d" | "30d";
+
+type Complaint = {
+  id: string;
+  latitude: number;
+  longitude: number;
+  category: Exclude<Category, "all">;
+  severity: string;
+  summary: string;
+  locationPrecision: string;
+  submittedAt?: { toDate?: () => Date };
+};
+
+type Recommendation = {
+  id: string;
+  category: Exclude<Category, "all">;
+  service: string;
+  latitude: number;
+  longitude: number;
+  reportCount: number;
+  priorityScore: number;
+  complaints: Complaint[];
+  connectionDistanceKm: number;
+};
+
+type MapViewport = {
+  south: number;
+  west: number;
+  north: number;
+  east: number;
+};
+
+const urgencyWeight: Record<string, number> = {
+  high: 3,
+  medium: 2,
+  low: 1,
+};
+
+const complaintColors: Record<string, string> = {
+  high: "#ef4444",
+  medium: "#f59e0b",
+  low: "#3b82f6",
+};
+
+const categoryLabels: Record<Exclude<Category, "all">, string> = {
+  healthcare: "Healthcare",
+  water: "Water",
+  transportation: "Transport",
+  emergency_response: "Emergency response",
+  food: "Food access",
+  broadband: "Broadband",
+  other: "Other services",
+};
+
+const categoryFilterLabels: Record<Category, string> = {
+  all: "All",
+  healthcare: "Healthcare",
+  water: "Water",
+  transportation: "Transport",
+  emergency_response: "Emergency",
+  food: "Food",
+  broadband: "Broadband",
+  other: "Other",
+};
+
+const serviceRecommendations: Record<Exclude<Category, "all">, string> = {
+  healthcare: "Candidate pharmacy / clinic access point",
+  water: "Candidate water-access assessment point",
+  transportation: "Candidate transport / road-access review point",
+  emergency_response: "Candidate emergency-response access point",
+  food: "Candidate food-access distribution point",
+  broadband: "Candidate broadband access hub",
+  other: "Candidate essential-service review point",
+};
+
+const MIN_REPORTS_PER_CLUSTER = 2;
+const MIN_CONNECTION_DISTANCE_KM = 2;
+const MAX_CONNECTION_DISTANCE_KM = 100;
+const CONNECTION_DISTANCE_MULTIPLIER = 2.5;
+
+function escapeHtml(value: string) {
+  return value.replace(/[&<>"']/g, (character) => {
+    const replacements: Record<string, string> = {
+      "&": "&amp;",
+      "<": "&lt;",
+      ">": "&gt;",
+      '"': "&quot;",
+      "'": "&#039;",
+    };
+
+    return replacements[character];
+  });
 }
 
-export const ControlPanelDashboard: React.FC<ControlPanelDashboardProps> = ({
-  reports,
-  priorities,
-  strategicSites,
-  weatherData,
-  onSelectReport,
-  onSelectRepair,
-  onNavigateToMap,
-  onOpenReportModal,
-  onOpenLiteApp,
-  onOpenWeatherModal,
-  onOpenCouncilPlan,
-  onOpenUploadModal,
-  onUpvoteReport,
-  isEasyMode = false,
-}) => {
-  const [selectedMapItem, setSelectedMapItem] = useState<any>(null);
-  const [categoryFilter, setCategoryFilter] = useState<string>('all');
+function formatSeverity(severity: string) {
+  if (!severity) return "Not specified";
+  return severity.charAt(0).toUpperCase() + severity.slice(1);
+}
 
-  // Filtered reports for quick community feed preview
-  const filteredReports = categoryFilter === 'all' 
-    ? reports 
-    : reports.filter((r) => r.category === categoryFilter);
+function formatTime(submittedAt: Complaint["submittedAt"]) {
+  if (!submittedAt?.toDate) return "Just submitted";
 
-  const criticalIssuesCount = reports.filter((r) => r.severity === 'critical').length;
-  const emergencyBlocksCount = reports.filter((r) => r.emergencyAccessBlocked).length;
+  return submittedAt.toDate().toLocaleString([], {
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+  });
+}
 
-  // Filter top 3 highest priority repairs
-  const topPriorities = priorities.slice(0, 3);
+function distanceInKm(first: Complaint, second: Complaint) {
+  const earthRadiusKm = 6371;
+  const latitudeDifference =
+    ((second.latitude - first.latitude) * Math.PI) / 180;
+  const longitudeDifference =
+    ((second.longitude - first.longitude) * Math.PI) / 180;
 
-  // Key strategic sites
-  const hospitalSite = strategicSites.find((s) => s.type === 'hospital');
-  const technicianSite = strategicSites.find((s) => s.type === 'technician_depot');
+  const a =
+    Math.sin(latitudeDifference / 2) ** 2 +
+    Math.cos((first.latitude * Math.PI) / 180) *
+      Math.cos((second.latitude * Math.PI) / 180) *
+      Math.sin(longitudeDifference / 2) ** 2;
+
+  return 2 * earthRadiusKm * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+}
+
+function adaptiveConnectionDistanceKm(categoryReports: Complaint[]) {
+  if (categoryReports.length < 2) {
+    return MIN_CONNECTION_DISTANCE_KM;
+  }
+
+  const nearestNeighborDistances = categoryReports.map((complaint) => {
+    const distances = categoryReports
+      .filter((otherComplaint) => otherComplaint.id !== complaint.id)
+      .map((otherComplaint) => distanceInKm(complaint, otherComplaint))
+      .sort((first, second) => first - second);
+
+    return distances[0];
+  });
+
+  const sortedDistances = nearestNeighborDistances.sort(
+    (first, second) => first - second,
+  );
+
+  const middle = Math.floor(sortedDistances.length / 2);
+
+  const medianDistance =
+    sortedDistances.length % 2 === 0
+      ? (sortedDistances[middle - 1] + sortedDistances[middle]) / 2
+      : sortedDistances[middle];
+
+  return Math.max(
+    MIN_CONNECTION_DISTANCE_KM,
+    Math.min(
+      MAX_CONNECTION_DISTANCE_KM,
+      medianDistance * CONNECTION_DISTANCE_MULTIPLIER,
+    ),
+  );
+}
+
+function buildRecommendations(complaints: Complaint[]) {
+  const byCategory = new Map<Exclude<Category, "all">, Complaint[]>();
+
+  complaints.forEach((complaint) => {
+    const categoryReports = byCategory.get(complaint.category) || [];
+    categoryReports.push(complaint);
+    byCategory.set(complaint.category, categoryReports);
+  });
+
+  const recommendations: Recommendation[] = [];
+
+  byCategory.forEach((categoryReports, category) => {
+    const connectionDistanceKm =
+      adaptiveConnectionDistanceKm(categoryReports);
+
+    const remaining = [...categoryReports];
+
+    while (remaining.length > 0) {
+      const seed = remaining.shift();
+
+      if (!seed) continue;
+
+      const cluster = [seed];
+
+      for (let index = remaining.length - 1; index >= 0; index -= 1) {
+        if (
+          cluster.some(
+            (clusterComplaint) =>
+              distanceInKm(clusterComplaint, remaining[index]) <=
+              connectionDistanceKm,
+          )
+        ) {
+          cluster.push(remaining[index]);
+          remaining.splice(index, 1);
+        }
+      }
+
+      if (cluster.length < MIN_REPORTS_PER_CLUSTER) continue;
+
+      const totalWeight = cluster.reduce(
+        (total, complaint) =>
+          total + (urgencyWeight[complaint.severity] || 1),
+        0,
+      );
+
+      const latitude =
+        cluster.reduce(
+          (total, complaint) =>
+            total +
+            complaint.latitude * (urgencyWeight[complaint.severity] || 1),
+          0,
+        ) / totalWeight;
+
+      const longitude =
+        cluster.reduce(
+          (total, complaint) =>
+            total +
+            complaint.longitude * (urgencyWeight[complaint.severity] || 1),
+          0,
+        ) / totalWeight;
+
+      recommendations.push({
+        id: `${category}-${latitude.toFixed(4)}-${longitude.toFixed(4)}`,
+        category,
+        service: serviceRecommendations[category],
+        latitude,
+        longitude,
+        reportCount: cluster.length,
+        priorityScore: totalWeight,
+        complaints: cluster,
+        connectionDistanceKm,
+      });
+    }
+  });
+
+  return recommendations.sort(
+    (first, second) => second.priorityScore - first.priorityScore,
+  );
+}
+
+function reportIsInsideTimeRange(
+  complaint: Complaint,
+  timeRange: TimeRange,
+) {
+  if (timeRange === "all" || !complaint.submittedAt?.toDate) {
+    return true;
+  }
+
+  const ageInMilliseconds =
+    Date.now() - complaint.submittedAt.toDate().getTime();
+
+  const rangeInMilliseconds: Record<Exclude<TimeRange, "all">, number> = {
+    "24h": 24 * 60 * 60 * 1000,
+    "7d": 7 * 24 * 60 * 60 * 1000,
+    "30d": 30 * 24 * 60 * 60 * 1000,
+  };
+
+  return ageInMilliseconds <= rangeInMilliseconds[timeRange];
+}
+
+function pointIsInsideViewport(
+  latitude: number,
+  longitude: number,
+  viewport: MapViewport | null,
+) {
+  if (!viewport) return false;
 
   return (
-    <div className="space-y-6">
-      {/* 1. Welcoming Hero & Quick Actions Banner (Clean, Easy to Understand) */}
-      <section 
-        aria-label="Overview Banner"
-        className="rounded-2xl bg-gradient-to-r from-stone-900 via-stone-900/95 to-emerald-950/40 border border-stone-800 p-5 sm:p-6 shadow-md"
-      >
-        <div className="flex flex-col md:flex-row md:items-center justify-between gap-5">
-          <div className="space-y-1.5 max-w-2xl">
-            <div className="flex flex-wrap items-center gap-2">
-              <span className="px-2.5 py-0.5 rounded-full bg-emerald-500/10 border border-emerald-500/30 text-emerald-400 font-mono text-[11px] font-semibold tracking-wide">
-                Pine Basin & Blackwood Valley
-              </span>
-              <span className="text-xs text-stone-400 font-mono">
-                County Precincts 4 & 7
-              </span>
+    latitude >= viewport.south &&
+    latitude <= viewport.north &&
+    longitude >= viewport.west &&
+    longitude <= viewport.east
+  );
+}
+
+function recommendationIcon() {
+  return L.divIcon({
+    className: "",
+    html: `
+      <div style="
+        width: 40px;
+        height: 40px;
+        border-radius: 9999px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        background: #16a34a;
+        border: 3px solid white;
+        box-shadow: 0 4px 14px rgba(0,0,0,0.35);
+        color: white;
+        font-size: 22px;
+        font-weight: 800;
+      ">+</div>
+    `,
+    iconSize: [40, 40],
+    iconAnchor: [20, 20],
+  });
+}
+
+export default function ControlPanelDashboard() {
+  const mapElement = useRef<HTMLDivElement | null>(null);
+  const mapRef = useRef<L.Map | null>(null);
+  const complaintLayerRef = useRef<L.LayerGroup | null>(null);
+  const recommendationLayerRef = useRef<L.LayerGroup | null>(null);
+  const recommendationMarkersRef = useRef<Map<string, L.Marker>>(new Map());
+
+  const [complaints, setComplaints] = useState<Complaint[]>([]);
+  const [selectedCategory, setSelectedCategory] = useState<Category>("all");
+  const [selectedTimeRange, setSelectedTimeRange] =
+    useState<TimeRange>("all");
+  const [recommendations, setRecommendations] = useState<Recommendation[]>(
+    [],
+  );
+  const [viewport, setViewport] = useState<MapViewport | null>(null);
+
+  const visibleComplaints = useMemo(() => {
+    return complaints.filter((complaint) => {
+      const categoryMatches =
+        selectedCategory === "all" ||
+        complaint.category === selectedCategory;
+
+      return (
+        categoryMatches &&
+        reportIsInsideTimeRange(complaint, selectedTimeRange)
+      );
+    });
+  }, [complaints, selectedCategory, selectedTimeRange]);
+
+  const viewportRecommendations = useMemo(() => {
+    return recommendations.filter((recommendation) =>
+      pointIsInsideViewport(
+        recommendation.latitude,
+        recommendation.longitude,
+        viewport,
+      ),
+    );
+  }, [recommendations, viewport]);
+
+  useEffect(() => {
+    if (!mapElement.current || mapRef.current) return;
+
+    const map = L.map(mapElement.current, {
+      zoomControl: true,
+      attributionControl: false,
+    }).setView([37.7749, -122.4194], 12);
+
+    L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+      maxZoom: 19,
+    }).addTo(map);
+
+    complaintLayerRef.current = L.layerGroup().addTo(map);
+    recommendationLayerRef.current = L.layerGroup().addTo(map);
+    mapRef.current = map;
+
+    const updateViewport = () => {
+      const bounds = map.getBounds();
+
+      setViewport({
+        south: bounds.getSouth(),
+        west: bounds.getWest(),
+        north: bounds.getNorth(),
+        east: bounds.getEast(),
+      });
+    };
+
+    updateViewport();
+    map.on("moveend", updateViewport);
+
+    return () => {
+      map.off("moveend", updateViewport);
+      map.remove();
+      mapRef.current = null;
+      complaintLayerRef.current = null;
+      recommendationLayerRef.current = null;
+      recommendationMarkersRef.current.clear();
+    };
+  }, []);
+
+  useEffect(() => {
+    const unsubscribe = onSnapshot(
+      collection(db, "incomingSignals"),
+      (snapshot) => {
+        const validComplaints: Complaint[] = snapshot.docs
+          .map((document) => {
+            const data = document.data();
+            const category = String(data.category || "other");
+
+            return {
+              id: document.id,
+              latitude: Number(data.latitude),
+              longitude: Number(data.longitude),
+              category: (
+                category in categoryLabels ? category : "other"
+              ) as Exclude<Category, "all">,
+              severity: String(data.severity || "low").toLowerCase(),
+              summary: String(data.summary || ""),
+              locationPrecision: String(data.locationPrecision || ""),
+              submittedAt: data.submittedAt,
+            };
+          })
+          .filter(
+            (complaint) =>
+              Number.isFinite(complaint.latitude) &&
+              Number.isFinite(complaint.longitude) &&
+              complaint.latitude >= -90 &&
+              complaint.latitude <= 90 &&
+              complaint.longitude >= -180 &&
+              complaint.longitude <= 180,
+          );
+
+        setComplaints(validComplaints);
+      },
+      (error) => {
+        console.error("NeedMap Firestore read failed:", error);
+      },
+    );
+
+    return unsubscribe;
+  }, []);
+
+  useEffect(() => {
+    const complaintLayer = complaintLayerRef.current;
+
+    if (!complaintLayer) return;
+
+    complaintLayer.clearLayers();
+
+    visibleComplaints.forEach((complaint) => {
+      const marker = L.circleMarker(
+        [complaint.latitude, complaint.longitude],
+        {
+          radius: 10,
+          color: "#ffffff",
+          weight: 2,
+          fillColor: complaintColors[complaint.severity] || "#8b5cf6",
+          fillOpacity: 0.95,
+        },
+      );
+
+      const category = categoryLabels[complaint.category];
+      const description = complaint.summary
+        ? escapeHtml(complaint.summary)
+        : "No description provided.";
+
+      const location =
+        complaint.locationPrecision === "approximate_grid_500m"
+          ? "Approximate 500 m grid area"
+          : `${complaint.latitude.toFixed(4)}, ${complaint.longitude.toFixed(4)}`;
+
+      marker.bindTooltip(
+        `
+          <div style="min-width: 220px; max-width: 280px; font-family: system-ui, sans-serif; line-height: 1.4;">
+            <div style="font-weight: 700; margin-bottom: 6px;">${escapeHtml(category)}</div>
+            <div style="margin-bottom: 5px;">
+              <span style="font-weight: 600;">Urgency:</span>
+              ${escapeHtml(formatSeverity(complaint.severity))}
             </div>
-            <h1 className="text-xl sm:text-2xl lg:text-3xl font-bold text-white tracking-tight">
-              Rural Infrastructure & Community Portal
-            </h1>
-            <p className="text-sm text-stone-300 leading-relaxed">
-              {isEasyMode 
-                ? 'Check road conditions, report hazards in under a minute, and see where county repair crews and new clinics are planned.'
-                : 'GIS spatial prioritization, real-time weather degradation telemetry, and AI optimization for rural hospital & technician siting.'}
-            </p>
+            <div style="margin-bottom: 5px;">
+              <span style="font-weight: 600;">Report:</span>
+              ${description}
+            </div>
+            <div style="color: #64748b; font-size: 12px;">
+              ${escapeHtml(location)} · ${escapeHtml(formatTime(complaint.submittedAt))}
+            </div>
           </div>
+        `,
+        {
+          direction: "top",
+          offset: [0, -10],
+          opacity: 1,
+          sticky: true,
+        },
+      );
 
-          {/* Quick Big Action Buttons (Easy Touch Targets) */}
-          <div className="flex flex-wrap items-center gap-2.5 shrink-0">
-            <button
-              onClick={onOpenReportModal}
-              className="px-4 py-2.5 rounded-xl bg-emerald-400 hover:bg-emerald-300 text-stone-950 font-bold text-sm shadow-md hover:shadow-emerald-500/20 transition-all flex items-center gap-2 active:scale-95"
-            >
-              <AlertTriangle className="w-4 h-4 text-stone-950" />
-              <span>Report an Issue</span>
-            </button>
+      marker.addTo(complaintLayer);
+    });
+  }, [visibleComplaints]);
 
-            <button
-              onClick={onOpenLiteApp}
-              className="px-3.5 py-2.5 rounded-xl bg-stone-800 hover:bg-stone-700 border border-stone-700 text-stone-200 font-medium text-xs sm:text-sm transition-colors flex items-center gap-2"
-              title="Ultra-fast version for slow rural 2G/3G connections"
-            >
-              <Smartphone className="w-4 h-4 text-emerald-400" />
-              <span className="hidden sm:inline">Open Lite Mobile App</span>
-              <span className="sm:hidden">Lite App</span>
-            </button>
+  function renderViewportRecommendations(
+    recommendationsToRender: Recommendation[],
+  ) {
+    const recommendationLayer = recommendationLayerRef.current;
 
-            {false && (
+    if (!recommendationLayer) return;
+
+    recommendationLayer.clearLayers();
+    recommendationMarkersRef.current.clear();
+
+    recommendationsToRender.forEach((recommendation) => {
+      const radiusMeters = Math.max(
+        500,
+        Math.min(5000, recommendation.connectionDistanceKm * 1000),
+      );
+
+      L.circle([recommendation.latitude, recommendation.longitude], {
+        radius: radiusMeters,
+        color: "#22c55e",
+        weight: 2,
+        fillColor: "#22c55e",
+        fillOpacity: 0.13,
+        dashArray: "6 8",
+      }).addTo(recommendationLayer);
+
+      const marker = L.marker(
+        [recommendation.latitude, recommendation.longitude],
+        { icon: recommendationIcon() },
+      );
+
+      const label = categoryLabels[recommendation.category];
+
+      marker.bindTooltip(
+        `
+          <div style="min-width: 235px; max-width: 290px; font-family: system-ui, sans-serif; line-height: 1.45;">
+            <div style="font-weight: 800; color: #15803d; margin-bottom: 6px;">
+              NeedMap recommendation
+            </div>
+            <div style="font-weight: 700; margin-bottom: 6px;">
+              ${escapeHtml(recommendation.service)}
+            </div>
+            <div style="margin-bottom: 5px;">
+              <span style="font-weight: 600;">Need type:</span>
+              ${escapeHtml(label)}
+            </div>
+            <div style="margin-bottom: 5px;">
+              <span style="font-weight: 600;">Evidence:</span>
+              ${recommendation.reportCount} connected reports
+            </div>
+            <div style="margin-bottom: 5px;">
+              <span style="font-weight: 600;">Priority score:</span>
+              ${recommendation.priorityScore}
+              (${recommendation.complaints
+                .map((complaint) => formatSeverity(complaint.severity))
+                .join(", ")})
+            </div>
+            <div style="margin-bottom: 5px;">
+              <span style="font-weight: 600;">Connection scale:</span>
+              ${recommendation.connectionDistanceKm.toFixed(1)} km
+            </div>
+            <div style="font-size: 12px; color: #64748b;">
+              Candidate area only — requires road, land, and local field validation before any placement decision.
+            </div>
+          </div>
+        `,
+        {
+          direction: "top",
+          offset: [0, -20],
+          opacity: 1,
+          sticky: true,
+        },
+      );
+
+      marker.addTo(recommendationLayer);
+      recommendationMarkersRef.current.set(recommendation.id, marker);
+    });
+  }
+
+  useEffect(() => {
+    renderViewportRecommendations(viewportRecommendations);
+  }, [viewportRecommendations]);
+
+  function analyzeNeeds() {
+    const nextRecommendations = buildRecommendations(visibleComplaints);
+
+    setRecommendations(nextRecommendations);
+
+    const map = mapRef.current;
+
+    if (map && nextRecommendations.length > 0) {
+      map.fitBounds(
+        L.latLngBounds(
+          nextRecommendations.map((recommendation) => [
+            recommendation.latitude,
+            recommendation.longitude,
+          ]),
+        ),
+        {
+          padding: [90, 90],
+          maxZoom: 3,
+        },
+      );
+    }
+  }
+
+  function clearAnalysis() {
+    recommendationLayerRef.current?.clearLayers();
+    recommendationMarkersRef.current.clear();
+    setRecommendations([]);
+  }
+
+  function focusRecommendation(recommendation: Recommendation) {
+    const map = mapRef.current;
+
+    if (!map) return;
+
+    map.flyTo([recommendation.latitude, recommendation.longitude], 13, {
+      duration: 0.7,
+    });
+
+    window.setTimeout(() => {
+      recommendationMarkersRef.current
+        .get(recommendation.id)
+        ?.openTooltip();
+    }, 750);
+  }
+
+  function updateCategory(category: Category) {
+    setSelectedCategory(category);
+    clearAnalysis();
+  }
+
+  function updateTimeRange(timeRange: TimeRange) {
+    setSelectedTimeRange(timeRange);
+    clearAnalysis();
+  }
+
+  return (
+    <div className="relative h-screen w-screen">
+      <div ref={mapElement} className="h-full w-full" />
+
+      <div className="absolute left-4 top-4 z-[1000] max-w-[calc(100vw-2rem)] rounded-xl bg-white/95 p-3 shadow-lg backdrop-blur">
+        <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-600">
+          Category
+        </p>
+
+        <div className="flex max-w-[520px] flex-wrap gap-1.5">
+          {(Object.keys(categoryFilterLabels) as Category[]).map(
+            (category) => (
               <button
-                onClick={onOpenPipelineModal}
-                className="hidden md:flex px-3 py-2.5 rounded-xl bg-purple-950/70 hover:bg-purple-900/80 border border-purple-800 text-purple-300 font-medium text-xs transition-colors items-center gap-1.5"
-                title="Open 8-Stage Spatial Pipeline Inspector (MedMap Methodology)"
-              >
-                <Sparkles className="w-3.5 h-3.5 text-purple-400" />
-                <span>8-Stage Pipeline</span>
-              </button>
-            )}
-
-            {onOpenCouncilPlan && (
-              <button
-                onClick={onOpenCouncilPlan}
-                className="hidden lg:flex px-3 py-2.5 rounded-xl bg-stone-900 hover:bg-stone-800 border border-stone-800 text-stone-300 font-medium text-xs transition-colors items-center gap-1.5"
-              >
-                <FileText className="w-3.5 h-3.5 text-stone-400" />
-                <span>Action Plan</span>
-              </button>
-            )}
-          </div>
-        </div>
-      </section>
-
-      {/* 2. Civic Metric Ribbon (Spacious, Legible, with Weather Impact Card) */}
-      <section aria-label="District Civic Metrics" className="grid grid-cols-2 sm:grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4">
-        {/* Metric 1: Real-Time Weather Impact on Infrastructure Degradation */}
-        <div 
-          onClick={onOpenWeatherModal}
-          className="bg-stone-900/90 border border-stone-800 hover:border-cyan-500/60 rounded-xl p-4 shadow-sm transition-all cursor-pointer group relative overflow-hidden"
-          role="button"
-          tabIndex={0}
-          aria-label="View real-time weather degradation telemetry"
-        >
-          <div className="flex items-center justify-between">
-            <span className="text-[11px] font-mono text-cyan-400 uppercase tracking-wider block font-semibold">
-              Weather Degradation
-            </span>
-            <div className="p-1 rounded bg-cyan-950/80 border border-cyan-800/60 text-cyan-400 group-hover:scale-110 transition-transform">
-              <CloudRain className="w-3.5 h-3.5" />
-            </div>
-          </div>
-          <div className="flex items-baseline gap-2 mt-1.5">
-            <span className="text-xl sm:text-2xl font-bold text-cyan-300 font-mono tabular-nums">
-              {weatherData ? `${weatherData.erosionMultiplier}x Rate` : '2.4x Rate'}
-            </span>
-            <span className="text-xs text-stone-400 font-mono">Erosion</span>
-          </div>
-          <p className="text-[11px] text-stone-400 mt-1 truncate">
-            {weatherData 
-              ? `${weatherData.precipitation24hMm}mm Rain · ${weatherData.soilSaturationPct}% Saturation` 
-              : '41.2mm rain · 86% Saturation'}
-          </p>
-          <span className="text-[10px] text-cyan-400/90 font-mono mt-2 flex items-center gap-1 group-hover:underline">
-            <span>Tap for live telemetry</span>
-            <ArrowRight className="w-3 h-3 group-hover:translate-x-0.5 transition-transform" />
-          </span>
-        </div>
-
-        {/* Metric 2: Emergency Corridors & Road Hazards */}
-        <div className="bg-stone-900/90 border border-stone-800 rounded-xl p-4 shadow-sm">
-          <div className="flex items-center justify-between">
-            <span className="text-[11px] font-mono text-rose-400 uppercase tracking-wider block font-semibold">
-              Road & Bridge Blocks
-            </span>
-            <div className="p-1 rounded bg-rose-950/80 border border-rose-800/60 text-rose-400">
-              <AlertTriangle className="w-3.5 h-3.5" />
-            </div>
-          </div>
-          <div className="flex items-baseline gap-2 mt-1.5">
-            <span className="text-xl sm:text-2xl font-bold text-rose-400 font-mono tabular-nums">
-              {emergencyBlocksCount} Cutoffs
-            </span>
-            <span className="text-xs text-stone-400 font-mono">Active</span>
-          </div>
-          <p className="text-[11px] text-stone-400 mt-1 truncate">
-            {criticalIssuesCount} critical repairs awaiting dispatch
-          </p>
-          <span className="text-[10px] text-stone-500 font-mono mt-2 block">
-            School bus & ambulance bypass active
-          </span>
-        </div>
-
-        {/* Metric 3: AI Hospital Siting Impact */}
-        <div className="bg-stone-900/90 border border-stone-800 rounded-xl p-4 shadow-sm">
-          <div className="flex items-center justify-between">
-            <span className="text-[11px] font-mono text-emerald-400 uppercase tracking-wider block font-semibold">
-              Proposed Hospital Siting
-            </span>
-            <div className="p-1 rounded bg-emerald-950/80 border border-emerald-800/60 text-emerald-400">
-              <Hospital className="w-3.5 h-3.5" />
-            </div>
-          </div>
-          <div className="flex items-baseline gap-2 mt-1.5">
-            <span className="text-xl sm:text-2xl font-bold text-emerald-400 font-mono tabular-nums">
-              -36 min
-            </span>
-            <span className="text-xs text-stone-400 font-mono">Ambulance</span>
-          </div>
-          <p className="text-[11px] text-stone-400 mt-1 truncate">
-            Mill Creek Health Center serves 2,400 residents
-          </p>
-          <span className="text-[10px] text-emerald-400/90 font-mono mt-2 block">
-            Golden-hour access rises to 88%
-          </span>
-        </div>
-
-        {/* Metric 4: AI Technician & Outpost Response */}
-        <div className="bg-stone-900/90 border border-stone-800 rounded-xl p-4 shadow-sm">
-          <div className="flex items-center justify-between">
-            <span className="text-[11px] font-mono text-sky-400 uppercase tracking-wider block font-semibold">
-              Technician Response
-            </span>
-            <div className="p-1 rounded bg-sky-950/80 border border-sky-800/60 text-sky-400">
-              <Wrench className="w-3.5 h-3.5" />
-            </div>
-          </div>
-          <div className="flex items-baseline gap-2 mt-1.5">
-            <span className="text-xl sm:text-2xl font-bold text-sky-400 font-mono tabular-nums">
-              42 min
-            </span>
-            <span className="text-xs text-stone-400 font-mono">vs 3.5 hrs</span>
-          </div>
-          <p className="text-[11px] text-stone-400 mt-1 truncate">
-            Pine Crossroads equipment & lineman outpost
-          </p>
-          <span className="text-[10px] text-sky-400/90 font-mono mt-2 block">
-            Covers 4 critical mountain passes
-          </span>
-        </div>
-      </section>
-
-      {/* 3. Main Interactive GIS Map (Clear, Center-Stage, with Simple Controls) */}
-      <section aria-label="Interactive Infrastructure Map" className="space-y-3">
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
-          <div>
-            <h2 className="text-base sm:text-lg font-bold text-white flex items-center gap-2">
-              <MapPin className="w-4 h-4 text-emerald-400" />
-              <span>Strategic GIS Infrastructure Map</span>
-            </h2>
-            <p className="text-xs text-stone-400">
-              {isEasyMode
-                ? 'Tap any marker on the map to see repair details, or tap anywhere to report a hazard at that spot.'
-                : 'Elevation contours, river networks, road degradation indices, and AI-optimized hospital/technician locations.'}
-            </p>
-          </div>
-
-          <button
-            onClick={onNavigateToMap}
-            className="self-start sm:self-auto text-xs text-emerald-400 hover:text-emerald-300 font-semibold flex items-center gap-1 transition-colors"
-          >
-            <span>Full Map Screen</span>
-            <ArrowRight className="w-3.5 h-3.5" />
-          </button>
-        </div>
-
-        {/* Embedded Interactive Map */}
-        <div className="rounded-2xl overflow-hidden border border-stone-800 shadow-xl bg-stone-900">
-          <InteractiveMap
-            reports={reports}
-            priorities={priorities}
-            strategicSites={strategicSites}
-            selectedItem={selectedMapItem}
-            onSelectItem={(item) => setSelectedMapItem(item)}
-            onDropPin={(coords) => {
-              setSelectedMapItem(null);
-              onOpenReportModal();
-            }}
-            onUpvoteReport={(id) => {
-              if (onUpvoteReport) onUpvoteReport(id);
-            }}
-            isLiteMode={false}
-          />
-        </div>
-      </section>
-
-      {/* 4. Three Clean, Simple Focus Sections Below the Map */}
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 pt-2">
-        {/* Section A: Top Urgent Repairs Needed (High Priority Queue) */}
-        <div className="bg-stone-900/90 border border-stone-800 rounded-2xl p-5 shadow-sm space-y-4">
-          <div className="flex items-center justify-between border-b border-stone-800 pb-3">
-            <div className="flex items-center gap-2">
-              <div className="w-7 h-7 rounded-lg bg-rose-500/10 border border-rose-500/30 flex items-center justify-center text-rose-400">
-                <AlertTriangle className="w-4 h-4" />
-              </div>
-              <div>
-                <h3 className="text-sm font-bold text-white">Top Immediate Repairs</h3>
-                <span className="text-[11px] text-stone-400 font-mono">Ranked by Isolation Risk</span>
-              </div>
-            </div>
-            <button
-              onClick={onNavigateToMap}
-              className="text-xs text-rose-400 hover:text-rose-300 font-mono flex items-center gap-1 transition-colors"
-            >
-              <span>View All</span>
-              <ChevronRight className="w-3 h-3" />
-            </button>
-          </div>
-
-          <div className="space-y-3">
-            {topPriorities.map((item) => (
-              <div
-                key={item.id}
-                onClick={() => onSelectRepair(item)}
-                className="p-3.5 rounded-xl bg-stone-950/70 border border-stone-800/80 hover:border-stone-700 cursor-pointer transition-all space-y-2 group"
-              >
-                <div className="flex items-start justify-between gap-2">
-                  <div className="flex items-center gap-2">
-                    <span className="w-5 h-5 rounded-full bg-rose-950 border border-rose-800/80 text-rose-400 text-xs font-mono font-bold flex items-center justify-center shrink-0">
-                      {item.rank}
-                    </span>
-                    <h4 className="text-xs font-bold text-stone-100 group-hover:text-emerald-400 transition-colors line-clamp-1">
-                      {item.assetName}
-                    </h4>
-                  </div>
-                  <span className={`px-2 py-0.5 rounded text-[10px] font-mono uppercase font-bold shrink-0 ${
-                    item.status === 'urgent_dispatch' 
-                      ? 'bg-rose-950/80 text-rose-300 border border-rose-800/80 animate-pulse'
-                      : 'bg-amber-950/80 text-amber-300 border border-amber-800/80'
-                  }`}>
-                    {item.status.replace('_', ' ')}
-                  </span>
-                </div>
-
-                <p className="text-[11px] text-stone-400 line-clamp-2 leading-relaxed">
-                  {item.rationale}
-                </p>
-
-                <div className="flex items-center justify-between text-[11px] font-mono text-stone-400 pt-1 border-t border-stone-850">
-                  <span className="flex items-center gap-1 text-stone-300">
-                    <DollarSign className="w-3 h-3 text-stone-500" />
-                    ${item.estimatedCostUsd.toLocaleString()}
-                  </span>
-                  <span className="flex items-center gap-1 text-stone-400">
-                    <Clock className="w-3 h-3 text-stone-500" />
-                    {item.estimatedCrewDays} Crew Days
-                  </span>
-                </div>
-              </div>
-            ))}
-          </div>
-        </div>
-
-        {/* Section B: AI Strategic Siting Highlights (Hospitals & Technicians) */}
-        <div className="bg-stone-900/90 border border-stone-800 rounded-2xl p-5 shadow-sm space-y-4">
-          <div className="flex items-center justify-between border-b border-stone-800 pb-3">
-            <div className="flex items-center gap-2">
-              <div className="w-7 h-7 rounded-lg bg-emerald-500/10 border border-emerald-500/30 flex items-center justify-center text-emerald-400">
-                <Sparkles className="w-4 h-4" />
-              </div>
-              <div>
-                <h3 className="text-sm font-bold text-white">AI Strategic Siting</h3>
-                <span className="text-[11px] text-stone-400 font-mono">Clinics & Technician Depots</span>
-              </div>
-            </div>
-            <span className="px-2 py-0.5 rounded bg-emerald-950/60 border border-emerald-800/60 text-emerald-400 text-[10px] font-mono">
-              AI Optimized
-            </span>
-          </div>
-
-          <div className="space-y-3.5">
-            {/* Hospital Recommendation Card */}
-            {hospitalSite && (
-              <div className="p-3.5 rounded-xl bg-stone-950/70 border border-emerald-900/40 space-y-2">
-                <div className="flex items-center justify-between">
-                  <span className="text-[10px] font-mono uppercase tracking-wider text-emerald-400 font-semibold flex items-center gap-1">
-                    <Hospital className="w-3.5 h-3.5" />
-                    Proposed Rural Health Center
-                  </span>
-                  <span className="text-[10px] text-stone-400 font-mono">Pine Basin District</span>
-                </div>
-                <h4 className="text-xs font-bold text-white">{hospitalSite.name}</h4>
-                <p className="text-[11px] text-stone-300 leading-relaxed">
-                  {hospitalSite.keyJustification}
-                </p>
-                <div className="flex items-center justify-between text-[11px] font-mono pt-1 text-stone-400">
-                  <span className="text-emerald-300 font-bold">-{hospitalSite.avgTravelTimeReductionMin} min travel time</span>
-                  <span>{hospitalSite.coveragePopulation.toLocaleString()} residents served</span>
-                </div>
-              </div>
-            )}
-
-            {/* Technician Outpost Card */}
-            {technicianSite && (
-              <div className="p-3.5 rounded-xl bg-stone-950/70 border border-sky-900/40 space-y-2">
-                <div className="flex items-center justify-between">
-                  <span className="text-[10px] font-mono uppercase tracking-wider text-sky-400 font-semibold flex items-center gap-1">
-                    <Wrench className="w-3.5 h-3.5" />
-                    Heavy Equipment & Lineman Depot
-                  </span>
-                  <span className="text-[10px] text-stone-400 font-mono">Crossroads Fork</span>
-                </div>
-                <h4 className="text-xs font-bold text-white">{technicianSite.name}</h4>
-                <p className="text-[11px] text-stone-300 leading-relaxed">
-                  {technicianSite.keyJustification}
-                </p>
-                <div className="flex items-center justify-between text-[11px] font-mono pt-1 text-stone-400">
-                  <span className="text-sky-300 font-bold">42 min response time</span>
-                  <span>4 mountain passes covered</span>
-                </div>
-              </div>
-            )}
-          </div>
-        </div>
-
-        {/* Section C: Recent Community Reports Feed */}
-        <div className="bg-stone-900/90 border border-stone-800 rounded-2xl p-5 shadow-sm space-y-4">
-          <div className="flex items-center justify-between border-b border-stone-800 pb-3">
-            <div className="flex items-center gap-2">
-              <div className="w-7 h-7 rounded-lg bg-amber-500/10 border border-amber-500/30 flex items-center justify-center text-amber-400">
-                <Users className="w-4 h-4" />
-              </div>
-              <div>
-                <h3 className="text-sm font-bold text-white">Community Reports</h3>
-                <span className="text-[11px] text-stone-400 font-mono">Recent Citizen Submissions</span>
-              </div>
-            </div>
-            <button
-              onClick={onOpenReportModal}
-              className="text-xs text-emerald-400 hover:text-emerald-300 font-bold flex items-center gap-0.5"
-            >
-              <span>+ New</span>
-            </button>
-          </div>
-
-          {/* Quick Category Filter Pills */}
-          <div className="flex items-center gap-1.5 overflow-x-auto pb-1 text-[11px] font-mono text-stone-400">
-            {['all', 'road', 'bridge', 'water', 'power'].map((cat) => (
-              <button
-                key={cat}
-                onClick={() => setCategoryFilter(cat)}
-                className={`px-2.5 py-1 rounded-md capitalize transition-colors ${
-                  categoryFilter === cat 
-                    ? 'bg-stone-800 text-emerald-400 font-bold' 
-                    : 'bg-stone-950/60 hover:text-stone-200'
+                key={category}
+                type="button"
+                onClick={() => updateCategory(category)}
+                className={`rounded-full px-2.5 py-1.5 text-xs font-semibold transition ${
+                  selectedCategory === category
+                    ? "bg-slate-900 text-white"
+                    : "bg-slate-100 text-slate-700 hover:bg-slate-200"
                 }`}
               >
-                {cat}
+                {categoryFilterLabels[category]}
+              </button>
+            ),
+          )}
+        </div>
+      </div>
+
+      <div className="absolute right-4 top-4 z-[1000] flex max-w-[calc(100vw-2rem)] flex-col items-end gap-2">
+        <div className="rounded-xl bg-white/95 p-2 shadow-lg backdrop-blur">
+          <div className="flex flex-wrap justify-end gap-1.5">
+            {(
+              [
+                ["24h", "24h"],
+                ["7d", "7d"],
+                ["30d", "30d"],
+                ["all", "All time"],
+              ] as const
+            ).map(([timeRange, label]) => (
+              <button
+                key={timeRange}
+                type="button"
+                onClick={() => updateTimeRange(timeRange)}
+                className={`rounded-lg px-2.5 py-1.5 text-xs font-semibold transition ${
+                  selectedTimeRange === timeRange
+                    ? "bg-slate-900 text-white"
+                    : "bg-slate-100 text-slate-700 hover:bg-slate-200"
+                }`}
+              >
+                {label}
               </button>
             ))}
           </div>
-
-          <div className="space-y-2.5 max-h-[340px] overflow-y-auto pr-1">
-            {filteredReports.slice(0, 4).map((report) => (
-              <div
-                key={report.id}
-                onClick={() => onSelectReport(report)}
-                className="p-3 rounded-xl bg-stone-950/60 border border-stone-800/80 hover:border-stone-700 cursor-pointer transition-all space-y-1.5 group"
-              >
-                <div className="flex items-center justify-between">
-                  <span className="text-xs font-bold text-stone-200 group-hover:text-emerald-400 transition-colors line-clamp-1">
-                    {report.title}
-                  </span>
-                  <span className={`px-1.5 py-0.5 rounded text-[10px] font-mono uppercase font-bold shrink-0 ${
-                    report.severity === 'critical' ? 'bg-red-950 text-red-400 border border-red-800' :
-                    report.severity === 'high' ? 'bg-amber-950 text-amber-400 border border-amber-800' :
-                    'bg-stone-800 text-stone-400'
-                  }`}>
-                    {report.severity}
-                  </span>
-                </div>
-                <p className="text-[11px] text-stone-400 line-clamp-1">
-                  {report.locationName} · {report.affectedHouseholds} homes affected
-                </p>
-                <div className="flex items-center justify-between text-[10px] font-mono text-stone-500 pt-1">
-                  <span>Reported {report.dateReported}</span>
-                  <button
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      if (onUpvoteReport) onUpvoteReport(report.id);
-                    }}
-                    className="flex items-center gap-1 text-emerald-400/90 hover:text-emerald-300 font-semibold"
-                  >
-                    <ThumbsUp className="w-3 h-3" />
-                    <span>{report.upvotes} Confirm</span>
-                  </button>
-                </div>
-              </div>
-            ))}
-          </div>
         </div>
+
+        <div className="flex gap-2">
+          {recommendations.length > 0 && (
+            <button
+              type="button"
+              onClick={clearAnalysis}
+              className="rounded-lg bg-white px-3 py-3 text-sm font-semibold text-slate-800 shadow-lg transition hover:bg-slate-100"
+            >
+              Clear analysis
+            </button>
+          )}
+
+          <button
+            type="button"
+            onClick={analyzeNeeds}
+            disabled={visibleComplaints.length < MIN_REPORTS_PER_CLUSTER}
+            className="rounded-lg bg-emerald-600 px-4 py-3 text-sm font-semibold text-white shadow-lg transition hover:bg-emerald-700 disabled:cursor-not-allowed disabled:bg-emerald-300"
+          >
+            Analyze {visibleComplaints.length} report
+            {visibleComplaints.length === 1 ? "" : "s"}
+          </button>
+        </div>
+      </div>
+
+      {recommendations.length > 0 && (
+        <aside className="absolute bottom-4 left-4 z-[1000] w-[min(380px,calc(100vw-2rem))] overflow-hidden rounded-xl bg-white/95 shadow-xl backdrop-blur">
+          <div className="border-b border-slate-200 px-4 py-3">
+            <p className="text-sm font-bold text-slate-900">
+              NeedMap recommendations
+            </p>
+            <p className="mt-0.5 text-xs text-slate-600">
+              Showing only candidate areas in the current map view
+            </p>
+          </div>
+
+          <div className="max-h-[280px] overflow-y-auto">
+            {viewportRecommendations.length === 0 ? (
+              <p className="px-4 py-5 text-sm text-slate-600">
+                No candidate recommendations are in this map view. Pan or zoom
+                to an area containing reported need.
+              </p>
+            ) : (
+              viewportRecommendations.map((recommendation, index) => (
+                <button
+                  key={recommendation.id}
+                  type="button"
+                  onClick={() => focusRecommendation(recommendation)}
+                  className="flex w-full gap-3 border-b border-slate-100 px-4 py-3 text-left transition last:border-b-0 hover:bg-emerald-50"
+                >
+                  <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-emerald-600 text-xs font-bold text-white">
+                    {index + 1}
+                  </span>
+
+                  <span className="min-w-0">
+                    <span className="block truncate text-sm font-semibold text-slate-900">
+                      {recommendation.service}
+                    </span>
+                    <span className="mt-1 block text-xs text-slate-600">
+                      {recommendation.reportCount} connected reports · score{" "}
+                      {recommendation.priorityScore} ·{" "}
+                      {recommendation.connectionDistanceKm.toFixed(1)} km scale
+                    </span>
+                    <span className="mt-1 block text-xs font-medium text-emerald-700">
+                      Needs field validation
+                    </span>
+                  </span>
+                </button>
+              ))
+            )}
+          </div>
+        </aside>
+      )}
+
+      <div className="pointer-events-none absolute bottom-4 right-4 z-[1000] rounded-lg bg-white/90 px-3 py-2 text-xs text-slate-700 shadow-md">
+        <span className="mr-3">
+          <span className="mr-1 inline-block h-2.5 w-2.5 rounded-full bg-red-500 align-middle" />
+          High
+        </span>
+        <span className="mr-3">
+          <span className="mr-1 inline-block h-2.5 w-2.5 rounded-full bg-amber-500 align-middle" />
+          Medium
+        </span>
+        <span>
+          <span className="mr-1 inline-block h-2.5 w-2.5 rounded-full bg-blue-500 align-middle" />
+          Low
+        </span>
       </div>
     </div>
   );
-};
+}
